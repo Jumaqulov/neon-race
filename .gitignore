@@ -8,6 +8,9 @@ dist/
 web/dist/
 backend/dist/
 
+# Verification evidence & artifacts
+evidence/
+
 # Future Rust / Cargo build artifacts
 backend/target/
 target/

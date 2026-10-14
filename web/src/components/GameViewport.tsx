@@ -3,10 +3,11 @@ import type { GameEngine } from '../game/GameEngine.ts';
 
 export interface GameViewportProps {
   onEngineReady: (engine: GameEngine) => void;
+  onEngineDispose?: (engine: GameEngine) => void;
   createEngine: () => GameEngine;
 }
 
-export function GameViewport({ onEngineReady, createEngine }: GameViewportProps) {
+export function GameViewport({ onEngineReady, onEngineDispose, createEngine }: GameViewportProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -17,8 +18,9 @@ export function GameViewport({ onEngineReady, createEngine }: GameViewportProps)
 
     return () => {
       engine.dispose();
+      onEngineDispose?.(engine);
     };
-  }, [createEngine, onEngineReady]);
+  }, [createEngine, onEngineReady, onEngineDispose]);
 
   return <div id="gl-viewport" ref={containerRef} />;
 }

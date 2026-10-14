@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Muscle Car Proving Ground (V3) — Local Backend Server (future Rust/Axum boundary)",
   "engines": {
-    "node": ">=22"
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
   },
   "scripts": {
     "start": "node src/index.mjs",

@@ -18,8 +18,12 @@ export function App() {
     setSnapshot(instance.getSnapshot());
   }, []);
 
+  const handleEngineDispose = useCallback((disposedInstance: GameEngine) => {
+    setEngine((current) => (current === disposedInstance ? null : current));
+  }, []);
+
   useEffect(() => {
-    if (!engine) return;
+    if (!engine || engine.isDisposed()) return;
     setSnapshot(engine.getSnapshot());
     const unsubscribe = engine.subscribe(() => {
       setSnapshot(engine.getSnapshot());
@@ -45,7 +49,11 @@ export function App() {
 
   return (
     <div className={shellClasses}>
-      <GameViewport createEngine={createEngine} onEngineReady={handleEngineReady} />
+      <GameViewport
+        createEngine={createEngine}
+        onEngineReady={handleEngineReady}
+        onEngineDispose={handleEngineDispose}
+      />
       {snapshot && (
         <>
           <GameToolbar snapshot={snapshot} onCommand={handleCommand} />

@@ -1,3 +1,8 @@
+declare const process: {
+  env: Record<string, string | undefined>;
+  cwd(): string;
+};
+
 declare module 'node:test' {
   export type TestFn = () => void | Promise<void>;
   function test(name: string, fn: TestFn): Promise<void>;
@@ -10,7 +15,11 @@ declare module 'node:assert/strict' {
   function assert(value: unknown, message?: string): asserts value;
   namespace assert {
     function equal(actual: unknown, expected: unknown, message?: string): void;
+    function notEqual(actual: unknown, expected: unknown, message?: string): void;
+    function deepEqual(actual: unknown, expected: unknown, message?: string): void;
     function match(value: string, regExp: RegExp, message?: string): void;
+    function throws(block: () => unknown, error?: RegExp | Error | object, message?: string): void;
+    function doesNotThrow(block: () => unknown, message?: string): void;
   }
   export default assert;
 }
@@ -19,6 +28,7 @@ declare module 'node:http' {
   export type IncomingHttpHeaders = Record<string, string | string[] | undefined>;
 
   export interface IncomingMessage {
+    url?: string;
     statusCode?: number;
     headers: IncomingHttpHeaders;
     on(event: 'data', listener: (chunk: Uint8Array) => void): this;
@@ -61,8 +71,11 @@ declare module 'node:http' {
 declare module 'node:fs/promises' {
   const fs: {
     readFile(filePath: string, encoding: 'utf8'): Promise<string>;
+    writeFile(filePath: string, data: string, encoding?: 'utf8'): Promise<void>;
     readdir(dirPath: string): Promise<string[]>;
     access(filePath: string): Promise<void>;
+    mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<string | undefined>;
+    rm(targetPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   };
   export default fs;
 }
@@ -73,11 +86,4 @@ declare module 'node:path' {
     resolve(...paths: string[]): string;
   };
   export default path;
-}
-
-declare module '../server/index.mjs' {
-  import type http from 'node:http';
-  export const ROOT: string;
-  export const DIST: string;
-  export function createLocalServer(distDir?: string): http.Server;
 }

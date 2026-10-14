@@ -21,6 +21,7 @@ import { ColliderGrid, collide } from './physics/collisions.ts';
 import { AdaptiveQuality } from './rendering/adaptiveQuality.ts';
 import { applySkyTheme, isMeshObject, lin, makeSkyMaterial, mergeRigidMeshes, THEMES } from './rendering/batching.ts';
 import { GaugeRenderer } from './rendering/gauges.ts';
+import { isSpriteObject, ResourceTracker } from './rendering/resourceTracker.ts';
 import { createMuscleCar, optimizeCarMeshes, type MuscleCarModel } from './vehicle/muscleCar.ts';
 import { buildWorld, instanceCones, resetCone, syncConeInstances, updateCones, type WorldSceneData } from './world/worldBuilder.ts';
 
@@ -33,6 +34,9 @@ export interface CarLabDiagnosticAPI {
     speed: number;
     gear: number;
     rpm: number;
+    thr: number;
+    brk: number;
+    hb: boolean;
     heading: number;
     yawRate: number;
     engineHealth: number;
@@ -94,6 +98,7 @@ export class GameEngine {
   public readonly audio: SoundEngine;
   public readonly cameraCtrl: CameraController;
   public readonly gauges: GaugeRenderer;
+  public readonly resources: ResourceTracker;
 
   private readonly headless: boolean;
   private readonly storage: StorageAdapter | null | undefined;
@@ -108,6 +113,7 @@ export class GameEngine {
   private fillLight: THREE.DirectionalLight | null = null;
   private skyMat: THREE.ShaderMaterial | null = null;
   private sky: THREE.Mesh | null = null;
+  private envTargets: Record<'day' | 'night', THREE.WebGLRenderTarget> | null = null;
   private envs: Record<'day' | 'night', THREE.Texture> | null = null;
   private world: WorldSceneData | null = null;
   private colliderGrid: ColliderGrid;
@@ -123,6 +129,8 @@ export class GameEngine {
   private crashParticles: CrashParticles | null = null;
   private glassShards: LensDebris | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private carLabToken: CarLabDiagnosticAPI | null = null;
+  private lastDisposedMemoryInfo: { geometries: number; textures: number } | null = null;
 
   private ready = false;
   private started = false;
@@ -173,6 +181,7 @@ export class GameEngine {
   private cachedSnapshot: GameSnapshot;
 
   private readonly handleWindowResize = (): void => {
+    if (this.disposed) return;
     if (!this.container) {
       this.resize(window.innerWidth, window.innerHeight);
     } else {
@@ -182,6 +191,7 @@ export class GameEngine {
   };
 
   private readonly handleVisibilityChange = (): void => {
+    if (this.disposed) return;
     if (typeof document !== 'undefined' && document.hidden) {
       this.input.clearAll();
       this.acc = 0;
@@ -193,6 +203,7 @@ export class GameEngine {
   };
 
   private readonly handleContextLost = (e: Event): void => {
+    if (this.disposed) return;
     e.preventDefault();
     this.contextLost = true;
     this.paused = true;
@@ -200,10 +211,15 @@ export class GameEngine {
   };
 
   private readonly handleContextRestored = (): void => {
+    if (this.disposed) return;
     this.contextLost = false;
     if (this.renderer) this.renderer.shadowMap.needsUpdate = true;
     this.lastTime = typeof performance !== 'undefined' ? performance.now() : 0;
     this.toast('Grafika tiklandi · davom etish uchun Esc');
+  };
+
+  private readonly handleCanvasPointerDown = (): void => {
+    this.focusCanvas();
   };
 
   constructor(options: GameEngineOptions = {}) {
@@ -218,6 +234,7 @@ export class GameEngine {
     this.audio = new SoundEngine();
     this.cameraCtrl = new CameraController();
     this.gauges = new GaugeRenderer();
+    this.resources = new ResourceTracker();
     this.input = new InputController({
       isStarted: () => this.started,
       onStart: () => this.start(),
@@ -227,12 +244,46 @@ export class GameEngine {
     this.cachedSnapshot = this.buildSnapshot();
   }
 
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  isLoopActive(): boolean {
+    return !this.disposed && this.rafId !== null;
+  }
+
+  getMemoryInfo(): { geometries: number; textures: number } {
+    if (this.renderer) {
+      return {
+        geometries: this.renderer.info.memory.geometries,
+        textures: this.renderer.info.memory.textures,
+      };
+    }
+    return this.lastDisposedMemoryInfo ?? { geometries: 0, textures: 0 };
+  }
+
+  focusCanvas(): void {
+    if (this.disposed) return;
+    const target = this.renderer?.domElement ?? this.container;
+    if (target && typeof target.focus === 'function') {
+      try {
+        target.focus({ preventScroll: true });
+      } catch {
+        target.focus();
+      }
+    }
+  }
+
   init(container: HTMLElement | null): void {
     if (this.disposed) return;
     this.container = container;
     this.touchMode = detectTouchDevice();
 
     if (this.headless) {
+      if (container && container.tabIndex < 0) {
+        container.tabIndex = 0;
+      }
+      this.registerGlobalDiagnostics();
       this.ready = true;
       this.loadingStatus = 'WASD: haydash · V: sinov · G: grafika · Y: 0.25× · Esc: pauza';
       this.input.attach();
@@ -269,6 +320,8 @@ export class GameEngine {
       renderer.outputEncoding = THREE.sRGBEncoding;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.domElement.id = 'gl';
+      renderer.domElement.tabIndex = 0;
+      renderer.domElement.setAttribute('aria-label', 'Game canvas');
 
       // Ensure no duplicate #gl canvas inside container
       while (container.firstChild) {
@@ -307,41 +360,62 @@ export class GameEngine {
       scene.add(sky);
       this.skyMat = skyMat;
       this.sky = sky;
+      this.resources.captureTree(sky);
 
       const pmrem = new THREE.PMREMGenerator(renderer);
+      const envTargets = {} as Record<'day' | 'night', THREE.WebGLRenderTarget>;
       const envs = {} as Record<'day' | 'night', THREE.Texture>;
-      for (const name of ['day', 'night'] as const) {
-        const s = new THREE.Scene();
-        const m = makeSkyMaterial();
-        applySkyTheme(m, THEMES[name]);
-        m.uniforms.glow.value = (m.uniforms.glow.value as number) * 0.35;
-        for (const k of ['top', 'horizon', 'bottom'] as const) {
-          (m.uniforms[k].value as THREE.Color).multiplyScalar(0.8);
+      try {
+        for (const name of ['day', 'night'] as const) {
+          const s = new THREE.Scene();
+          const m = makeSkyMaterial();
+          const cloudMat = new THREE.MeshBasicMaterial({
+            color: lin(name === 'day' ? 0xc8d9e3 : 0x172637),
+            side: THREE.DoubleSide,
+          });
+          try {
+            applySkyTheme(m, THEMES[name]);
+            m.uniforms.glow.value = (m.uniforms.glow.value as number) * 0.35;
+            for (const k of ['top', 'horizon', 'bottom'] as const) {
+              (m.uniforms[k].value as THREE.Color).multiplyScalar(0.8);
+            }
+            s.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), m));
+            for (let j = 0; j < 3; j++) {
+              const card = new THREE.Mesh(new THREE.PlaneGeometry(8, 1.0 + j * 0.3), cloudMat);
+              card.position.set(-3 + j * 3, 4.0 + j * 0.6, 3 - j * 4);
+              card.lookAt(0, 0, 0);
+              s.add(card);
+            }
+            // Prevent Three.js r128 PMREMGenerator from rendering its internal module-global
+            // backgroundBox geometry when the full-sphere sky dome already encloses the scene.
+            s.background = {} as unknown as THREE.Texture;
+            const rt = pmrem.fromScene(s, 0.06);
+            s.background = null;
+            envTargets[name] = rt;
+            envs[name] = rt.texture;
+            this.resources.trackRenderTarget(rt);
+          } finally {
+            s.traverse((o) => {
+              if (isMeshObject(o) && o.geometry) o.geometry.dispose();
+            });
+            m.dispose();
+            cloudMat.dispose();
+          }
         }
-        s.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), m));
-        const cloudMat = new THREE.MeshBasicMaterial({
-          color: lin(name === 'day' ? 0xc8d9e3 : 0x172637),
-          side: THREE.DoubleSide,
-        });
-        for (let j = 0; j < 3; j++) {
-          const card = new THREE.Mesh(new THREE.PlaneGeometry(8, 1.0 + j * 0.3), cloudMat);
-          card.position.set(-3 + j * 3, 4.0 + j * 0.6, 3 - j * 4);
-          card.lookAt(0, 0, 0);
-          s.add(card);
-        }
-        envs[name] = pmrem.fromScene(s, 0.06).texture;
-        s.traverse((o) => {
-          if (isMeshObject(o) && o.geometry) o.geometry.dispose();
-        });
-        m.dispose();
-        cloudMat.dispose();
+      } finally {
+        pmrem.dispose();
       }
-      pmrem.dispose();
+      this.envTargets = envTargets;
       this.envs = envs;
 
       const world = buildWorld(scene, renderer);
+      this.resources.captureTree(scene);
       instanceCones(scene, world);
       const worldSavedDraws = mergeRigidMeshes(scene);
+      this.resources.captureTree(scene);
+      for (const cone of world.cones) {
+        this.resources.captureTree(cone.obj);
+      }
       this.world = world;
       this.colliderGrid = new ColliderGrid(world.colliders.circles);
 
@@ -355,6 +429,14 @@ export class GameEngine {
       this.exhaust = new ExhaustSmoke(scene);
 
       const car = createMuscleCar(this.settings.paint);
+      const carSpriteGeometry = new THREE.Sprite().geometry.clone();
+      car.group.traverse((obj) => {
+        if (isSpriteObject(obj)) {
+          obj.geometry = carSpriteGeometry;
+          obj.userData.ownsGeometry = true;
+        }
+      });
+      this.resources.captureTree(car.group);
       scene.add(car.group);
       quality.savedDraws = worldSavedDraws + optimizeCarMeshes(car) + (world.cones.length * 3 - 3);
       this.car = car;
@@ -364,6 +446,7 @@ export class GameEngine {
       this.damage = new VehicleDamage(car);
       this.crashParticles = new CrashParticles(scene);
       this.glassShards = new LensDebris(scene);
+      this.resources.captureTree(scene);
 
       this.phys.onImpact = (event) => this.damage?.enqueue(event);
       this.phys.reset(...START_POSE);
@@ -373,6 +456,7 @@ export class GameEngine {
       this.input.attach();
       this.cameraCtrl.attach(renderer.domElement, () => this.started && this.settings.cam === 4);
 
+      renderer.domElement.addEventListener('pointerdown', this.handleCanvasPointerDown);
       renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost);
       renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored);
       window.addEventListener('resize', this.handleWindowResize);
@@ -396,6 +480,11 @@ export class GameEngine {
       this.lastTime = performance.now();
       this.rafId = requestAnimationFrame(this.frame);
     } catch (err) {
+      try {
+        this.cleanupInternal();
+      } catch {
+        // preserve original initialization error
+      }
       const msg = err instanceof Error ? err.message : String(err);
       this.fail('WebGL sahnasini yaratishda xato: ' + msg);
     }
@@ -410,7 +499,7 @@ export class GameEngine {
   private registerGlobalDiagnostics(): void {
     if (typeof window === 'undefined') return;
     const getRenderer = (): THREE.WebGLRenderer | null => this.renderer;
-    window.carLab = Object.freeze({
+    const api: CarLabDiagnosticAPI = Object.freeze({
       version: 'physics-graphics-3.0',
       snapshot: () => (this.damage ? this.damage.snapshot() : null),
       physics: () => ({
@@ -419,6 +508,9 @@ export class GameEngine {
         speed: this.phys.speed * 3.6,
         gear: this.phys.gear,
         rpm: this.phys.rpm,
+        thr: this.phys.thr,
+        brk: this.phys.brk,
+        hb: this.phys.hb,
         heading: this.phys.heading,
         yawRate: this.phys.r,
         engineHealth: this.phys.engineHealth,
@@ -468,6 +560,8 @@ export class GameEngine {
         };
       },
     });
+    this.carLabToken = api;
+    window.carLab = api;
     window.neonLocal = Object.freeze({
       version: '0.2.0',
       mode: 'local-only',
@@ -477,8 +571,11 @@ export class GameEngine {
   }
 
   setGaugeCanvases(clusterCanvas: HTMLCanvasElement | null, gMeterCanvas: HTMLCanvasElement | null): void {
+    if (this.disposed) return;
     this.gauges.setCanvases(clusterCanvas, gMeterCanvas);
-    this.gauges.draw(this.phys, this.settings.mph, this.touchMode);
+    if (clusterCanvas || gMeterCanvas) {
+      this.gauges.draw(this.phys, this.settings.mph, this.touchMode);
+    }
   }
 
   start(): void {
@@ -490,6 +587,13 @@ export class GameEngine {
         this.toast('Brauzerda Web Audio mavjud emas · ovozsiz rejim');
       } else if (!this.settings.sound) {
         this.audio.setEnabled(false);
+      }
+    }
+    if (typeof document !== 'undefined') {
+      const active = document.activeElement as HTMLElement | null;
+      const inSplash = Boolean(active && (active.id === 'go' || active.closest?.('#splash')));
+      if (!active || active === document.body || active === document.documentElement || inSplash) {
+        this.focusCanvas();
       }
     }
     this.emitSnapshot();
@@ -563,6 +667,9 @@ export class GameEngine {
   }
 
   subscribe(listener: () => void): () => void {
+    if (this.disposed) {
+      return () => {};
+    }
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -570,6 +677,7 @@ export class GameEngine {
   }
 
   private emitSnapshot(): void {
+    if (this.disposed) return;
     this.cachedSnapshot = this.buildSnapshot();
     for (const listener of this.listeners) {
       listener();
@@ -577,11 +685,13 @@ export class GameEngine {
   }
 
   private toast(msg: string): void {
+    if (this.disposed) return;
     this.toastMessage = msg;
     if (this.toastTimer !== null) {
       clearTimeout(this.toastTimer);
     }
     this.toastTimer = setTimeout(() => {
+      if (this.disposed) return;
       this.toastMessage = null;
       this.toastTimer = null;
       this.emitSnapshot();
@@ -620,6 +730,7 @@ export class GameEngine {
   }
 
   private setPaint(hex: number): void {
+    if (this.disposed) return;
     this.settings.paint = hex;
     store.set('paint', hex, this.storage);
     this.car?.setPaint(hex);
@@ -627,6 +738,7 @@ export class GameEngine {
   }
 
   public toggleKey(code: string): void {
+    if (this.disposed) return;
     switch (code) {
       case 'KeyC':
         this.settings.cam = (this.settings.cam + 1) % CAMS.length;
@@ -741,6 +853,7 @@ export class GameEngine {
   }
 
   public repairCar(): void {
+    if (this.disposed) return;
     this.parts?.repair();
     this.damage?.repair();
     this.phys.setDamage(this.damage ? this.damage.zones : { front: 0, rear: 0, left: 0, right: 0 }, this.car?.wheels);
@@ -763,6 +876,7 @@ export class GameEngine {
   }
 
   public resetCar(): void {
+    if (this.disposed) return;
     this.repairCar();
     this.phys.reset(...START_POSE);
     this.exhaust?.clear();
@@ -780,6 +894,7 @@ export class GameEngine {
   }
 
   public launchCrashTest(): void {
+    if (this.disposed) return;
     this.repairCar();
     this.exhaust?.clear();
     this.skids?.breakAll();
@@ -857,6 +972,7 @@ export class GameEngine {
   }
 
   public advanceSimulation(input: GameInput, h: number): number {
+    if (this.disposed) return 0;
     const count = clamp(Math.ceil(((this.phys.speed + Math.abs(this.phys.r) * 2.8) * h) / 0.14), 1, 8);
     const sub = h / count;
     let impact = 0;
@@ -1083,7 +1199,16 @@ export class GameEngine {
     if (dt > 0) this.updateEffects(dt);
     if (this.started && !this.paused) this.updateDrift(dt);
 
-    if (this.car && this.camera && this.sky && this.sun && this.renderer && this.smoke && this.exhaust && this.engineVapor) {
+    if (
+      this.car &&
+      this.camera &&
+      this.sky &&
+      this.sun &&
+      this.renderer &&
+      this.smoke &&
+      this.exhaust &&
+      this.engineVapor
+    ) {
       this.cameraCtrl.update(
         realDt,
         this.started,
@@ -1248,63 +1373,163 @@ export class GameEngine {
     };
   }
 
+  private cleanupInternal(): void {
+    const errors: unknown[] = [];
+    const safeRun = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        errors.push(err);
+      }
+    };
+
+    safeRun(() => {
+      if (this.rafId !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this.rafId);
+        this.rafId = null;
+      }
+    });
+
+    safeRun(() => {
+      if (this.toastTimer !== null) {
+        clearTimeout(this.toastTimer);
+        this.toastTimer = null;
+      }
+    });
+
+    safeRun(() => this.input.detach());
+    safeRun(() => this.cameraCtrl.detach());
+    safeRun(() => this.audio.dispose());
+
+    safeRun(() => {
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect();
+        this.resizeObserver = null;
+      }
+    });
+
+    safeRun(() => {
+      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('resize', this.handleWindowResize);
+      }
+    });
+
+    safeRun(() => {
+      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      }
+    });
+
+    safeRun(() => {
+      if (this.renderer) {
+        this.renderer.domElement.removeEventListener('pointerdown', this.handleCanvasPointerDown);
+        this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
+        this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
+      }
+    });
+
+    safeRun(() => {
+      if (this.envTargets) {
+        this.resources.trackRenderTarget(this.envTargets.day);
+        this.resources.trackRenderTarget(this.envTargets.night);
+      }
+      if (this.sun?.shadow?.map) {
+        this.resources.trackRenderTarget(this.sun.shadow.map as THREE.WebGLRenderTarget);
+      }
+      if (this.parts) {
+        for (const p of this.parts.parts) {
+          this.resources.captureTree(p.obj);
+        }
+      }
+      if (this.world) {
+        for (const c of this.world.cones) {
+          this.resources.captureTree(c.obj);
+        }
+      }
+      if (this.car) {
+        this.resources.captureTree(this.car.group);
+      }
+      if (this.scene) {
+        this.resources.captureTree(this.scene);
+        this.scene.environment = null;
+        this.scene.fog = null;
+      }
+    });
+
+    safeRun(() => {
+      this.resources.dispose();
+    });
+
+    safeRun(() => {
+      if (this.scene) {
+        this.scene.clear();
+        this.scene = null;
+      }
+    });
+
+    safeRun(() => {
+      if (this.renderer) {
+        const renderer = this.renderer;
+        this.renderer = null;
+        renderer.renderLists?.dispose?.();
+        renderer.dispose();
+        this.lastDisposedMemoryInfo = {
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures,
+        };
+        renderer.forceContextLoss?.();
+        if (renderer.domElement.parentNode) {
+          renderer.domElement.parentNode.removeChild(renderer.domElement);
+        }
+      }
+    });
+
+    safeRun(() => {
+      if (typeof window !== 'undefined' && this.carLabToken && window.carLab === this.carLabToken) {
+        delete window.carLab;
+      }
+      this.carLabToken = null;
+    });
+
+    this.phys.onImpact = undefined;
+    this.gauges.setCanvases(null, null);
+    this.envTargets = null;
+    this.envs = null;
+    this.world = null;
+    this.car = null;
+    this.damage = null;
+    this.parts = null;
+    this.skids = null;
+    this.smoke = null;
+    this.engineVapor = null;
+    this.exhaust = null;
+    this.crashParticles = null;
+    this.glassShards = null;
+    this.metalShards = null;
+    this.quality = null;
+    this.hemi = null;
+    this.sun = null;
+    this.fillLight = null;
+    this.sky = null;
+    this.skyMat = null;
+    this.camera = null;
+    this.container = null;
+    this.listeners.clear();
+
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Multiple errors occurred during GameEngine.dispose()');
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-
-    if (this.rafId !== null && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
-    if (this.toastTimer !== null) {
-      clearTimeout(this.toastTimer);
-      this.toastTimer = null;
-    }
-    this.input.detach();
-    this.cameraCtrl.detach();
-    this.audio.dispose();
-
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-      this.resizeObserver = null;
-    }
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('resize', this.handleWindowResize);
-    }
-    if (typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-    }
-    if (this.renderer) {
-      this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
-      this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
-    }
-    if (this.envs) {
-      this.envs.day.dispose();
-      this.envs.night.dispose();
-      this.envs = null;
-    }
-    if (this.scene) {
-      const geometries = new Set<THREE.BufferGeometry>();
-      const materials = new Set<THREE.Material>();
-      this.scene.traverse((obj) => {
-        if (isMeshObject(obj)) {
-          if (obj.geometry) geometries.add(obj.geometry);
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => materials.add(m));
-          else if (obj.material) materials.add(obj.material);
-        }
-      });
-      geometries.forEach((g) => g.dispose());
-      materials.forEach((m) => m.dispose());
-      this.scene.clear();
-      this.scene = null;
-    }
-    if (this.renderer) {
-      this.renderer.dispose();
-      if (this.renderer.domElement.parentNode) {
-        this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
-      }
-      this.renderer = null;
-    }
-    this.listeners.clear();
+    this.ready = false;
+    this.started = false;
+    this.paused = true;
+    this.cleanupInternal();
   }
 }

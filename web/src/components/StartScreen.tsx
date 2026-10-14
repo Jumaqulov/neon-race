@@ -19,18 +19,15 @@ export function StartScreen({ snapshot, onCommand }: StartScreenProps) {
 
   const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    handleStartOrReload();
+    handleAction();
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.code === 'Enter' || e.code === 'Space') {
       e.preventDefault();
-      handleStartOrReload();
+      e.stopPropagation();
+      handleAction();
     }
-  };
-
-  const handleStartOrReload = () => {
-    handleAction();
   };
 
   const buttonLabel = error
@@ -92,7 +89,14 @@ export function StartScreen({ snapshot, onCommand }: StartScreenProps) {
           <span>Ta’mirlash</span>
         </div>
         <div className="touch-note">Chapdagi tugmalar — rul. O‘ngda gaz va tormoz. HB — qo‘l tormozi.</div>
-        <div id="go" role="button" tabIndex={0} onPointerDown={handlePointerDown} onKeyDown={handleKeyDown}>
+        <div
+          id="go"
+          role="button"
+          tabIndex={0}
+          onClick={handleAction}
+          onPointerDown={handlePointerDown}
+          onKeyDown={handleKeyDown}
+        >
           {buttonLabel}
         </div>
         <div id="loading-status" role={error ? 'alert' : undefined}>

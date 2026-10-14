@@ -1,6 +1,6 @@
-import type http from 'node:http';
+import type { Server } from 'node:http';
 
 export const REPO_ROOT: string;
 export const WEB_ROOT: string;
 export const DIST: string;
-export function createLocalServer(distDir?: string): http.Server;
+export function createLocalServer(distDir?: string): Server;

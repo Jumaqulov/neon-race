@@ -5,13 +5,15 @@
   "type": "module",
   "description": "Muscle Car Proving Ground (V3) — React + TypeScript + Vite Web Client",
   "engines": {
-    "node": ">=22"
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "test": "node --test tests/physics.test.ts tests/engine.test.ts",
+    "test:e2e": "node --test tests/e2e.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests"
   },

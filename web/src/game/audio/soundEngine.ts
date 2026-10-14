@@ -11,6 +11,7 @@ export interface AudioUpdateInput {
 
 interface OscLayer {
   o: OscillatorNode;
+  g: GainNode;
   mul: number;
 }
 
@@ -28,6 +29,7 @@ export class SoundEngine {
   public ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private out: DynamicsCompressorNode | null = null;
+  private shaper: WaveShaperNode | null = null;
   private lp: BiquadFilterNode | null = null;
   private eng: GainNode | null = null;
   private oscs: OscLayer[] = [];
@@ -36,16 +38,35 @@ export class SoundEngine {
   private noise: AudioBuffer | null = null;
   private skid: NoiseLoopLayer | null = null;
   private wind: NoiseLoopLayer | null = null;
+  private readonly oneShots = new Set<AudioScheduledSourceNode>();
+  private closePromise: Promise<void> | null = null;
   private disposed = false;
+
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  waitForClose(): Promise<void> {
+    return this.closePromise ?? Promise.resolve();
+  }
 
   init(soundEnabled: boolean): boolean {
     if (this.disposed) return false;
     if (this.ctx) {
       if (this.ctx.state === 'suspended') {
-        void this.ctx.resume().catch(() => {});
+        const ctxRef = this.ctx;
+        void ctxRef
+          .resume()
+          .then(() => {
+            if (this.disposed && ctxRef.state !== 'closed') {
+              void ctxRef.close().catch(() => {});
+            }
+          })
+          .catch(() => {});
       }
       return true;
     }
+    if (typeof window === 'undefined') return false;
     const win = window as WebkitWindow;
     const AC = window.AudioContext || win.webkitAudioContext;
     if (!AC) return false;
@@ -63,6 +84,7 @@ export class SoundEngine {
       const curve = new Float32Array(1024);
       for (let i = 0; i < 1024; i++) curve[i] = Math.tanh((i / 511.5 - 1) * 2.2);
       shaper.curve = curve;
+      this.shaper = shaper;
 
       this.lp = c.createBiquadFilter();
       this.lp.type = 'lowpass';
@@ -83,7 +105,7 @@ export class SoundEngine {
         o.connect(g);
         g.connect(shaper);
         o.start();
-        return { o, mul };
+        return { o, g, mul };
       });
 
       shaper.connect(this.lp);
@@ -129,7 +151,9 @@ export class SoundEngine {
   }
 
   update(p: AudioUpdateInput): void {
-    if (!this.ctx || !this.lp || !this.eng || !this.lfo || !this.lfoG || !this.skid || !this.wind) return;
+    if (this.disposed || !this.ctx || !this.lp || !this.eng || !this.lfo || !this.lfoG || !this.skid || !this.wind) {
+      return;
+    }
     const t = this.ctx.currentTime;
     const f = (p.rpm / 60) * 4; // V8 firing frequency
     for (const { o, mul } of this.oscs) o.frequency.setTargetAtTime(f * mul, t, 0.015);
@@ -144,7 +168,7 @@ export class SoundEngine {
   }
 
   thud(j: number): void {
-    if (!this.ctx || !this.noise || !this.out) return;
+    if (this.disposed || !this.ctx || !this.noise || !this.out) return;
     const c = this.ctx;
     const s = c.createBufferSource();
     const f = c.createBiquadFilter();
@@ -158,9 +182,11 @@ export class SoundEngine {
     s.connect(f);
     f.connect(g);
     g.connect(this.out);
+    this.oneShots.add(s);
     s.start(t, Math.random());
     s.stop(t + 0.45);
     s.onended = () => {
+      this.oneShots.delete(s);
       s.disconnect();
       f.disconnect();
       g.disconnect();
@@ -168,7 +194,7 @@ export class SoundEngine {
   }
 
   glass(): void {
-    if (!this.ctx || !this.noise || !this.out) return;
+    if (this.disposed || !this.ctx || !this.noise || !this.out) return;
     const c = this.ctx;
     const t = c.currentTime;
     const s = c.createBufferSource();
@@ -182,9 +208,11 @@ export class SoundEngine {
     s.connect(f);
     f.connect(g);
     g.connect(this.out);
+    this.oneShots.add(s);
     s.start(t);
     s.stop(t + 0.33);
     s.onended = () => {
+      this.oneShots.delete(s);
       s.disconnect();
       f.disconnect();
       g.disconnect();
@@ -192,7 +220,7 @@ export class SoundEngine {
   }
 
   cone(sp: number): void {
-    if (!this.ctx || !this.out) return;
+    if (this.disposed || !this.ctx || !this.out) return;
     const c = this.ctx;
     const o = c.createOscillator();
     const g = c.createGain();
@@ -204,44 +232,67 @@ export class SoundEngine {
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
     o.connect(g);
     g.connect(this.out);
+    this.oneShots.add(o);
     o.start(t);
     o.stop(t + 0.18);
     o.onended = () => {
+      this.oneShots.delete(o);
       o.disconnect();
       g.disconnect();
     };
   }
 
   setEnabled(on: boolean): void {
+    if (this.disposed) return;
     if (this.ctx && this.master) {
       this.master.gain.setTargetAtTime(on ? 0.5 : 0, this.ctx.currentTime, 0.05);
     }
   }
 
   suspend(): void {
+    if (this.disposed) return;
     if (this.ctx && this.ctx.state === 'running') {
       void this.ctx.suspend().catch(() => {});
     }
   }
 
   resume(): void {
+    if (this.disposed) return;
     if (this.ctx && this.ctx.state === 'suspended') {
-      void this.ctx.resume().catch(() => {});
+      const ctxRef = this.ctx;
+      void ctxRef
+        .resume()
+        .then(() => {
+          if (this.disposed && ctxRef.state !== 'closed') {
+            void ctxRef.close().catch(() => {});
+          }
+        })
+        .catch(() => {});
     }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const { o } of this.oscs) {
+    for (const { o, g } of this.oscs) {
       try {
         o.stop();
         o.disconnect();
+        g.disconnect();
       } catch {
         // already stopped
       }
     }
     this.oscs = [];
+    for (const node of this.oneShots) {
+      try {
+        node.stop();
+        node.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+    this.oneShots.clear();
     if (this.lfo) {
       try {
         this.lfo.stop();
@@ -250,6 +301,14 @@ export class SoundEngine {
         // ignore
       }
       this.lfo = null;
+    }
+    if (this.lfoG) {
+      try {
+        this.lfoG.disconnect();
+      } catch {
+        // ignore
+      }
+      this.lfoG = null;
     }
     for (const layer of [this.skid, this.wind]) {
       if (layer) {
@@ -265,9 +324,25 @@ export class SoundEngine {
     }
     this.skid = null;
     this.wind = null;
+    for (const node of [this.shaper, this.lp, this.eng, this.out, this.master]) {
+      if (node) {
+        try {
+          node.disconnect();
+        } catch {
+          // ignore
+        }
+      }
+    }
+    this.shaper = null;
+    this.lp = null;
+    this.eng = null;
+    this.out = null;
+    this.master = null;
+    this.noise = null;
     if (this.ctx) {
-      void this.ctx.close().catch(() => {});
+      const c = this.ctx;
       this.ctx = null;
+      this.closePromise = c.close().catch(() => {});
     }
   }
 }

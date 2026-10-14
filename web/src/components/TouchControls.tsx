@@ -17,12 +17,19 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
   const [pressed, setPressed] = useState<Record<TouchControlKey, boolean>>(INITIAL_PRESSED);
 
   useEffect(() => {
-    const handleBlur = () => {
+    const handleReset = () => {
       setPressed(INITIAL_PRESSED);
     };
-    window.addEventListener('blur', handleBlur);
+    const handleVisibility = () => {
+      if (document.hidden) {
+        setPressed(INITIAL_PRESSED);
+      }
+    };
+    window.addEventListener('blur', handleReset);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
-      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('blur', handleReset);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
@@ -46,6 +53,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
     <div id="touch">
       <div className="tpad l">
         <button
+          type="button"
           className={`tbtn${pressed.left ? ' down' : ''}`}
           data-t="left"
           aria-label="Steer left"
@@ -59,6 +67,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
           </svg>
         </button>
         <button
+          type="button"
           className={`tbtn${pressed.right ? ' down' : ''}`}
           data-t="right"
           aria-label="Steer right"
@@ -74,6 +83,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
       </div>
       <div className="tpad r">
         <button
+          type="button"
           className={`tbtn${pressed.handbrake ? ' down' : ''}`}
           data-t="handbrake"
           onPointerDown={handleDown('handbrake')}
@@ -84,6 +94,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
           HB
         </button>
         <button
+          type="button"
           className={`tbtn brk${pressed.brake ? ' down' : ''}`}
           data-t="brake"
           onPointerDown={handleDown('brake')}
@@ -94,6 +105,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
           BRAKE
         </button>
         <button
+          type="button"
           className={`tbtn gas${pressed.throttle ? ' down' : ''}`}
           data-t="throttle"
           onPointerDown={handleDown('throttle')}

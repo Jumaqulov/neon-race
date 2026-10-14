@@ -73,6 +73,13 @@ export class CameraController {
 
   detach(): void {
     if (!this.domElement) return;
+    if (this.inspectDrag && typeof this.domElement.releasePointerCapture === 'function') {
+      try {
+        this.domElement.releasePointerCapture(this.inspectDrag.id);
+      } catch {
+        // ignore if pointer capture is already released
+      }
+    }
     this.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.domElement.removeEventListener('pointermove', this.onPointerMove);
     this.domElement.removeEventListener('pointerup', this.onPointerEnd);

@@ -10,11 +10,10 @@ const server = createLocalServer();
 let port = 0;
 
 before(async () => {
-  try {
-    await fs.access(path.join(DIST, 'index.html'));
-  } catch {
-    await viteBuild({ root: WEB_ROOT, logLevel: 'silent' });
-  }
+  // Always build fresh from current source; never pass using a stale dist/ directory.
+  await fs.rm(DIST, { recursive: true, force: true });
+  await viteBuild({ root: WEB_ROOT, logLevel: 'silent' });
+
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());
@@ -161,21 +160,47 @@ test('CSP does not permit external scripts or evaluation', async () => {
   assert(!csp.includes('unsafe-eval'));
 });
 
-test('Source and built dist files contain no external CDN, font or remote URL (offline readiness)', async () => {
-  const checkFiles: string[] = [
+test('Source and built dist HTML, CSS, and JS files contain no external CDN, font or remote asset URL (offline readiness)', async () => {
+  const htmlAndCssFiles: string[] = [
     path.join(WEB_ROOT, 'index.html'),
     path.join(WEB_ROOT, 'src', 'styles', 'game.css'),
     path.join(DIST, 'index.html'),
   ];
+  const jsFiles: string[] = [];
   const assetsDir = path.join(DIST, 'assets');
   const assetEntries = await fs.readdir(assetsDir);
   for (const name of assetEntries) {
     if (name.endsWith('.css')) {
-      checkFiles.push(path.join(assetsDir, name));
+      htmlAndCssFiles.push(path.join(assetsDir, name));
+    } else if (name.endsWith('.js')) {
+      jsFiles.push(path.join(assetsDir, name));
     }
   }
-  for (const file of checkFiles) {
+  assert(jsFiles.length >= 1, 'Expected at least one built JS asset in web/dist/assets');
+
+  for (const file of htmlAndCssFiles) {
     const text = await fs.readFile(file, 'utf8');
     assert(!/https?:\/\/|fonts\.google|cdnjs|unpkg|jsdelivr/.test(text), `External URL found in ${file}`);
+  }
+
+  for (const file of jsFiles) {
+    const text = await fs.readFile(file, 'utf8');
+    assert(
+      !/fonts\.googleapis\.com|fonts\.gstatic\.com|cdnjs\.cloudflare\.com|unpkg\.com|cdn\.jsdelivr\.net/i.test(text),
+      `External CDN reference found in built JS ${file}`,
+    );
+    // Strip comments and harmless W3C namespace / React error-doc strings to check for remote asset URLs
+    const withoutComments = text.replace(/\/\*[\s\S]*?\*\//g, '');
+    const urls = withoutComments.match(/https?:\/\/[^\s"'`)<>]+/g) ?? [];
+    const unexpectedUrls = urls.filter(
+      (u) =>
+        !u.startsWith('http://www.w3.org/') &&
+        !u.startsWith('https://react.dev/') &&
+        !u.startsWith('https://reactjs.org/') &&
+        !u.startsWith('https://threejs.org/') &&
+        !u.startsWith('http://khronos.org/') &&
+        !u.startsWith('https://www.khronos.org/'),
+    );
+    assert.deepEqual(unexpectedUrls, [], `Unexpected external URLs in built JS ${file}: ${unexpectedUrls.join(', ')}`);
   }
 });

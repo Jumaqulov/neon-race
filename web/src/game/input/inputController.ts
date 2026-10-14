@@ -3,17 +3,111 @@
 // ---------------------------------------------------------------
 import type { GameInput, TouchControlKey } from '../../shared/types.ts';
 
-export function isInteractiveTarget(target: EventTarget | null): boolean {
-  if (!target || typeof target !== 'object') return false;
-  const el = target as HTMLElement;
-  if (!el.tagName) return false;
-  const tag = el.tagName.toUpperCase();
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'DIALOG') {
+const INTERACTIVE_TAGS = new Set([
+  'BUTTON',
+  'INPUT',
+  'TEXTAREA',
+  'SELECT',
+  'DIALOG',
+  'SUMMARY',
+  'OPTION',
+  'OPTGROUP',
+  'A',
+]);
+
+const INTERACTIVE_ROLES = new Set([
+  'button',
+  'link',
+  'checkbox',
+  'switch',
+  'radio',
+  'menuitem',
+  'tab',
+  'textbox',
+  'combobox',
+  'listbox',
+  'slider',
+  'spinbutton',
+  'dialog',
+  'alertdialog',
+]);
+
+const INTERACTIVE_SELECTOR = [
+  'button',
+  'input',
+  'textarea',
+  'select',
+  'dialog',
+  'summary',
+  'a[href]',
+  '[contenteditable="true"]',
+  '[contenteditable=""]',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="checkbox"]',
+  '[role="switch"]',
+  '[role="radio"]',
+  '[role="menuitem"]',
+  '[role="tab"]',
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+].join(', ');
+
+interface ElementLike {
+  tagName?: string;
+  isContentEditable?: boolean;
+  contentEditable?: string;
+  role?: string;
+  getAttribute?: (name: string) => string | null;
+  closest?: (selector: string) => Element | null;
+  parentElement?: ElementLike | null;
+  parentNode?: ElementLike | null;
+}
+
+function isSingleNodeInteractive(node: ElementLike): boolean {
+  if (node.isContentEditable === true) return true;
+  if (node.contentEditable === 'true' || node.contentEditable === '') return true;
+  if (typeof node.getAttribute === 'function') {
+    const ce = node.getAttribute('contenteditable');
+    if (ce === 'true' || ce === '') return true;
+    const roleAttr = node.getAttribute('role')?.toLowerCase();
+    if (roleAttr && INTERACTIVE_ROLES.has(roleAttr)) return true;
+  }
+  if (typeof node.role === 'string' && INTERACTIVE_ROLES.has(node.role.toLowerCase())) {
     return true;
   }
-  if (el.isContentEditable) return true;
-  if (typeof el.closest === 'function' && el.closest('input, textarea, select, dialog, [role="dialog"]')) {
-    return true;
+  if (typeof node.tagName === 'string' && node.tagName.length > 0) {
+    const tag = node.tagName.toUpperCase();
+    if (tag === 'A') {
+      if (typeof node.getAttribute === 'function') {
+        return node.getAttribute('href') !== null;
+      }
+      return true;
+    }
+    if (INTERACTIVE_TAGS.has(tag)) return true;
+  }
+  return false;
+}
+
+export function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!target || typeof target !== 'object') return false;
+  let current: ElementLike | null = target as ElementLike;
+
+  if (typeof current.closest === 'function') {
+    const matched = current.closest(INTERACTIVE_SELECTOR);
+    if (matched) return true;
+  }
+
+  let depth = 0;
+  while (current && depth < 32) {
+    if (isSingleNodeInteractive(current)) return true;
+    current = current.parentElement ?? current.parentNode ?? null;
+    depth++;
   }
   return false;
 }
@@ -24,6 +118,8 @@ export interface InputCallbacks {
   onToggleKey: (code: string) => void;
   onInputReset?: () => void;
 }
+
+const TOUCH_KEYS: readonly TouchControlKey[] = ['throttle', 'brake', 'left', 'right', 'handbrake'];
 
 export class InputController {
   public readonly keys: Record<string, boolean> = {};
@@ -39,7 +135,11 @@ export class InputController {
   private readonly callbacks: InputCallbacks;
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
-    if (isInteractiveTarget(e.target)) return;
+    if (e.code === 'Tab') return;
+    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+    if (isInteractiveTarget(e.target) || isInteractiveTarget(activeEl)) {
+      return;
+    }
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
       e.preventDefault();
     }
@@ -56,8 +156,33 @@ export class InputController {
     this.keys[e.code] = false;
   };
 
+  private readonly handleFocusIn = (e: FocusEvent): void => {
+    if (isInteractiveTarget(e.target)) {
+      this.clearKeys();
+    }
+  };
+
   private readonly handleBlur = (): void => {
     this.clearAll();
+  };
+
+  private readonly handleVisibilityChange = (): void => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.clearAll();
+    }
+  };
+
+  private readonly handlePointerCancel = (): void => {
+    this.clearTouch();
+  };
+
+  private readonly handleLostPointerCapture = (e: PointerEvent): void => {
+    const target = e.target as HTMLElement | null;
+    const attr = target?.getAttribute?.('data-t') as TouchControlKey | null | undefined;
+    if (attr && TOUCH_KEYS.includes(attr)) {
+      this.touch[attr] = 0;
+      this.callbacks.onInputReset?.();
+    }
   };
 
   constructor(callbacks: InputCallbacks) {
@@ -70,6 +195,12 @@ export class InputController {
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
     window.addEventListener('blur', this.handleBlur);
+    window.addEventListener('pointercancel', this.handlePointerCancel);
+    window.addEventListener('lostpointercapture', this.handleLostPointerCapture);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('focusin', this.handleFocusIn);
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    }
   }
 
   detach(): void {
@@ -78,7 +209,39 @@ export class InputController {
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
     window.removeEventListener('blur', this.handleBlur);
+    window.removeEventListener('pointercancel', this.handlePointerCancel);
+    window.removeEventListener('lostpointercapture', this.handleLostPointerCapture);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('focusin', this.handleFocusIn);
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
     this.clearAll();
+  }
+
+  clearKeys(): void {
+    let changed = false;
+    for (const k of Object.keys(this.keys)) {
+      if (this.keys[k]) {
+        this.keys[k] = false;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.callbacks.onInputReset?.();
+    }
+  }
+
+  clearTouch(): void {
+    let changed = false;
+    for (const key of TOUCH_KEYS) {
+      if (this.touch[key] !== 0) {
+        this.touch[key] = 0;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.callbacks.onInputReset?.();
+    }
   }
 
   clearAll(): void {
