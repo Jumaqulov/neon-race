@@ -1,0 +1,16 @@
+{
+  "name": "@neon-race/backend",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Muscle Car Proving Ground (V3) — Local Backend Server (future Rust/Axum boundary)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test": "node --test tests/server.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests"
+  }
+}

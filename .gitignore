@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+web/node_modules/
+backend/node_modules/
+
+# Build outputs
+dist/
+web/dist/
+backend/dist/
+
+# Future Rust / Cargo build artifacts
+backend/target/
+target/
+
+# Logs & OS files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Environment & local overrides
+.env
+.env.local
+.env.*.local

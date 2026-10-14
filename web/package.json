@@ -1,0 +1,31 @@
+{
+  "name": "@neon-race/web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Muscle Car Proving Ground (V3) — React + TypeScript + Vite Web Client",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "test": "node --test tests/physics.test.ts tests/engine.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests"
+  },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "three": "0.128.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.2",
+    "@types/react-dom": "19.1.2",
+    "@types/three": "0.128.0",
+    "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.8.3",
+    "vite": "6.2.6"
+  }
+}

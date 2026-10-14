@@ -1,0 +1,29 @@
+{
+  "name": "neon-race",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Muscle Car Proving Ground (V3) — Monorepo (React + TypeScript + Vite web & backend)",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "web",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm --workspace=web run dev",
+    "build": "npm --workspace=web run build",
+    "preview": "npm --workspace=web run preview",
+    "start": "npm --workspace=backend run start",
+    "test": "npm --workspace=web run test && npm --workspace=backend run test",
+    "typecheck": "npm --workspace=web run typecheck && npm --workspace=backend run typecheck",
+    "lint": "eslint web/src web/tests backend/src backend/tests"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.24.0",
+    "eslint": "9.24.0",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.29.1"
+  }
+}
