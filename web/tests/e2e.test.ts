@@ -898,3 +898,364 @@ test('E2E 3: Real React StrictMode + WebGL GameViewport 5x mount -> run -> crash
     await context.close();
   }
 });
+
+test('E2E 4: Stage 3.1 Neon Circuit playable race flow (ModeSelect -> Ready -> Countdown lock -> Boost pickup & KeyE -> Tunnel -> 3 Laps via real physics -> RaceResults -> Restart -> Menu -> Poligon -> Mobile viewports)', async () => {
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
+  });
+  try {
+    const page = await context.newPage();
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => {
+      pageErrors.push(err.message);
+    });
+
+    await page.goto(prodBaseUrl, { waitUntil: 'networkidle' });
+    await page.waitForSelector('#gl');
+    await page.waitForSelector('[data-testid="mode-select"]');
+    await waitFrames(page, 2);
+
+    // 1. Capture Main Menu screenshot with ModeSelect
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'menu-mode-select.png') });
+
+    // 2. Select "Poyga — Neon Circuit"
+    await page.locator('[data-testid="start-neon-circuit"]').click();
+    await page.waitForSelector('[data-testid="race-ready-overlay"]');
+    const modeAfterSelect = await page.evaluate(() => window.carLab?.mode());
+    assert.equal(modeAfterSelect, 'neon_circuit');
+
+    // Click "Poygani boshlash" to start 3-2-1 countdown on the grid
+    await page.locator('[data-testid="start-race-btn"]').click();
+    await page.waitForSelector('[data-testid="race-countdown"]');
+    await waitFrames(page, 2);
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'race-start-grid.png') });
+
+    // 3. Verify car is locked and boost is blocked when pressing W and E during countdown
+    const startPose = await page.evaluate(() => window.carLab!.physics());
+    await page.keyboard.down('KeyW');
+    await page.keyboard.press('KeyE');
+    await waitFrames(page, 5);
+    const duringCountdown = await page.evaluate(() => ({
+      phys: window.carLab!.physics(),
+      race: window.carLab!.race(),
+    }));
+    await page.keyboard.up('KeyW');
+    assert.equal(duringCountdown.race?.phase, 'countdown');
+    assert.equal(duringCountdown.race?.rawTotalTime, 0, 'Race clock must stay at 0 during countdown');
+    assert.equal(duringCountdown.phys.speed, 0, 'Car speed must stay 0 during countdown');
+    assert(Math.abs(duringCountdown.phys.x - startPose.x) < 1e-4, 'Car X must not move during countdown');
+    assert.equal(duringCountdown.race?.boost.status, 'empty', 'Boost cannot activate during countdown');
+
+    // Finish remaining countdown steps to enter 'racing'
+    await page.evaluate(() => {
+      const lab = window.carLab!;
+      let safety = 0;
+      while (lab.race()?.phase === 'countdown' && safety < 500) {
+        lab.stepWithInput({ throttle: 0 }, 1 / 120);
+        safety++;
+      }
+    });
+    const phaseAfterCountdown = await page.evaluate(() => window.carLab?.race()?.phase);
+    assert.equal(phaseAfterCountdown, 'racing', 'Race must transition to racing after countdown');
+
+    // Helper inside page to drive N steps or until predicate using real physics waypoint controller
+    await page.evaluate(() => {
+      const wrapAng = (a: number): number => {
+        let r = (a + Math.PI) % (Math.PI * 2);
+        if (r < 0) r += Math.PI * 2;
+        return r - Math.PI;
+      };
+
+      const sampleAtS = (
+        samples: Array<{ s: number; x: number; y: number; heading: number }>,
+        totalLen: number,
+        targetS: number,
+      ) => {
+        let s = targetS % totalLen;
+        if (s < 0) s += totalLen;
+        for (let i = 0; i < samples.length; i++) {
+          const curr = samples[i];
+          const next = samples[(i + 1) % samples.length];
+          const nextS = i + 1 === samples.length ? totalLen : next.s;
+          if (s >= curr.s && s <= nextS) {
+            const span = Math.max(1e-6, nextS - curr.s);
+            const t = (s - curr.s) / span;
+            return {
+              x: curr.x + (next.x - curr.x) * t,
+              y: curr.y + (next.y - curr.y) * t,
+              heading: curr.heading + wrapAng(next.heading - curr.heading) * t,
+            };
+          }
+        }
+        return samples[0];
+      };
+
+      (window as unknown as {
+        __driveRaceUntil: (mode: 'pickup_boost' | 'reach_tunnel' | 'finish_race', maxSteps: number) => {
+          steps: number;
+          curS: number;
+          speedKmh: number;
+          race: ReturnType<NonNullable<typeof window.carLab>['race']>;
+        };
+      }).__driveRaceUntil = (goal, maxSteps) => {
+        const lab = window.carLab!;
+        const track = lab.track();
+        const samples = track.samples;
+        const totalLen = track.totalLength;
+        let steps = 0;
+        let curS = 0;
+
+        while (steps < maxSteps) {
+          const p = lab.physics();
+          const r = lab.race()!;
+          const speedMps = p.speed / 3.6;
+
+          let bestIdx = 0;
+          let bestDistSq = Infinity;
+          for (let i = 0; i < samples.length; i++) {
+            const dx = p.x - samples[i].x;
+            const dy = p.y - samples[i].y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestDistSq) {
+              bestDistSq = d2;
+              bestIdx = i;
+            }
+          }
+          curS = samples[bestIdx].s;
+
+          if (goal === 'pickup_boost' && r.boost.status === 'ready') break;
+          if (goal === 'reach_tunnel' && curS >= 180 && curS <= 220) break;
+          if (goal === 'finish_race' && r.phase === 'finished') break;
+
+          const lookaheadDist = Math.max(13, Math.min(22, speedMps * 0.72));
+          const nearPt = sampleAtS(samples, totalLen, curS + lookaheadDist);
+          const farPt = sampleAtS(samples, totalLen, curS + 32);
+
+          const targetAngle = Math.atan2(nearPt.y - p.y, nearPt.x - p.x);
+          const angleErr = wrapAng(targetAngle - p.heading);
+          const curveAngle = Math.abs(wrapAng(farPt.heading - samples[bestIdx].heading));
+
+          if (goal === 'finish_race' && r.boost.status === 'ready' && curveAngle < 0.14 && Math.abs(angleErr) < 0.12) {
+            lab.activateBoost();
+          }
+
+          let targetSpeed = 46;
+          if (curveAngle > 0.42) targetSpeed = 19.5;
+          else if (curveAngle > 0.22) targetSpeed = 25;
+          else if (curveAngle > 0.10) targetSpeed = 33;
+
+          const steer = Math.max(-1, Math.min(1, angleErr * 2.4 - p.yawRate * 0.22));
+          let throttle = 1;
+          let brake = 0;
+          if (speedMps > targetSpeed + 2.2) {
+            throttle = 0;
+            brake = Math.min(0.75, (speedMps - targetSpeed) * 0.18);
+          } else if (speedMps > targetSpeed) {
+            throttle = 0.25;
+          }
+
+          lab.stepWithInput({ throttle, brake, steer, analog: true }, 1 / 120);
+          steps++;
+        }
+
+        return {
+          steps,
+          curS,
+          speedKmh: lab.physics().speed,
+          race: lab.race(),
+        };
+      };
+    });
+
+    // 4a. Drive forward to collect Boost Pad 0 on the start straight
+    const pickupRes = await page.evaluate(() =>
+      (window as unknown as { __driveRaceUntil: (g: string, m: number) => { speedKmh: number; race: { boost: { status: string } } } })
+        .__driveRaceUntil('pickup_boost', 1200),
+    );
+    assert.equal(pickupRes.race.boost.status, 'ready', 'Must collect Boost Pad 0 on start straight');
+
+    // Press KeyE while holding W to activate boost in real browser and capture race-boost-active.png
+    const speedBeforeBoost = pickupRes.speedKmh;
+    await page.locator('#gl').focus();
+    await page.keyboard.down('KeyW');
+    await page.keyboard.press('KeyE');
+    await page.evaluate(() => {
+      for (let i = 0; i < 45; i++) {
+        window.carLab!.stepWithInput({ throttle: 1, brake: 0, steer: 0 }, 1 / 120);
+      }
+    });
+    await waitFrames(page, 2);
+    const activeBoostState = await page.evaluate(() => ({
+      speedKmh: window.carLab!.physics().speed,
+      race: window.carLab!.race(),
+    }));
+    await page.keyboard.up('KeyW');
+    assert.equal(activeBoostState.race?.boost.isActive, true, 'KeyE must activate boost');
+    assert(
+      activeBoostState.speedKmh > speedBeforeBoost + 15,
+      `Active boost must increase speed (before=${speedBeforeBoost.toFixed(1)}, after=${activeBoostState.speedKmh.toFixed(1)})`,
+    );
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'race-boost-active.png') });
+
+    // 4b. Drive into the industrial neon tunnel (s ~ 180..220m) and capture race-tunnel-track.png
+    const tunnelRes = await page.evaluate(() =>
+      (window as unknown as { __driveRaceUntil: (g: string, m: number) => { curS: number } }).__driveRaceUntil(
+        'reach_tunnel',
+        4000,
+      ),
+    );
+    assert(tunnelRes.curS >= 180 && tunnelRes.curS <= 230, `Car must reach neon tunnel section (s=${tunnelRes.curS})`);
+    await waitFrames(page, 2);
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'race-tunnel-track.png') });
+
+    // Test Pause / Resume via Escape during active race
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[data-testid="race-pause-modal"]');
+    const pausedRaceTime = await page.evaluate(() => window.carLab?.race()?.rawTotalTime ?? 0);
+    await waitFrames(page, 4);
+    const pausedRaceTimeAfter = await page.evaluate(() => window.carLab?.race()?.rawTotalTime ?? 0);
+    assert.equal(pausedRaceTimeAfter, pausedRaceTime, 'Race timer must freeze while paused');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('[data-testid="race-pause-modal"]'));
+
+    // 5. Complete all 3 laps via real physics waypoint controller and verify RaceResults modal
+    const finishRes = await page.evaluate(() =>
+      (window as unknown as {
+        __driveRaceUntil: (
+          g: string,
+          m: number,
+        ) => {
+          steps: number;
+          race: {
+            phase: string;
+            currentLap: number;
+            lapTimes: number[];
+            bestLapTime: number | null;
+            finalTime: number;
+            boost: { boostsUsed: number };
+          };
+        };
+      }).__driveRaceUntil('finish_race', 18000),
+    );
+    assert.equal(finishRes.race.phase, 'finished', '3-lap race must finish');
+    assert.equal(finishRes.race.currentLap, 3, 'Finished race must stay at lap 3 (never 4/3)');
+    assert.equal(finishRes.race.lapTimes.length, 3, 'All 3 lap times must be recorded');
+    assert(finishRes.race.bestLapTime !== null && finishRes.race.bestLapTime > 10);
+
+    await page.waitForSelector('[data-testid="race-results-modal"]');
+    await waitFrames(page, 3);
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'race-results-modal.png') });
+
+    // Verify finalTime remains frozen after additional frames
+    const frozenTimeCheck = await page.evaluate(() => window.carLab?.race()?.finalTime);
+    assert.equal(frozenTimeCheck, finishRes.race.finalTime, 'Final time must remain frozen after finish');
+
+    // 6. Test "Qayta poyga" (Restart) -> KeyR Respawn (+5s) -> Pause -> "Menyuga qaytish"
+    await page.locator('[data-testid="restart-race-btn"]').click();
+    await page.waitForSelector('[data-testid="race-countdown"]');
+    await page.evaluate(() => {
+      let safety = 0;
+      while (window.carLab?.race()?.phase === 'countdown' && safety < 500) {
+        window.carLab.stepWithInput({ throttle: 0 }, 1 / 120);
+        safety++;
+      }
+    });
+    await page.keyboard.press('KeyR');
+    const afterRespawn = await page.evaluate(() => window.carLab?.race());
+    assert.equal(afterRespawn?.respawnCount, 1, 'KeyR in race mode must increment respawnCount');
+    assert.equal(afterRespawn?.penaltyTime, 5, 'KeyR in race mode must add +5s penalty');
+
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[data-testid="race-pause-modal"]');
+    await page.locator('[data-testid="pause-menu-btn"]').click();
+    await page.waitForSelector('[data-testid="mode-select"]');
+
+    // 7. Switch to "Poligon" mode from Main Menu and verify Proving Ground works
+    await page.locator('[data-testid="start-proving-ground"]').click();
+    await page.waitForFunction(() => window.carLab?.mode() === 'proving_ground');
+    await page.keyboard.press('KeyR');
+    await waitFrames(page, 2);
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'proving-ground-mode.png') });
+
+    // 8. Verify Mobile Portrait (390x844) and Landscape (844x390) viewports in Race mode with Touch controls
+    await page.locator('[data-testid="proving-menu-btn"]').click();
+    await page.waitForSelector('[data-testid="start-neon-circuit"]');
+    await page.locator('[data-testid="start-neon-circuit"]').click();
+    await page.waitForSelector('[data-testid="start-race-btn"]');
+    await page.locator('[data-testid="start-race-btn"]').click();
+    await page.evaluate(() => {
+      let safety = 0;
+      while (window.carLab?.race()?.phase === 'countdown' && safety < 500) {
+        window.carLab.stepWithInput({ throttle: 0 }, 1 / 120);
+        safety++;
+      }
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForSelector('[data-testid="touch-boost-btn"]');
+    await waitFrames(page, 2);
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'race-mobile-portrait.png') });
+
+    const checkNoOverlap = async () =>
+      page.evaluate(() => {
+        const rectsOverlap = (a: DOMRect, b: DOMRect) =>
+          a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        const topLeft = document.getElementById('race-top-left')?.getBoundingClientRect();
+        const topCenter = document.getElementById('race-top-center')?.getBoundingClientRect();
+        const topRight = document.getElementById('race-top-right')?.getBoundingClientRect();
+        const boostBtn = document.querySelector('[data-testid="touch-boost-btn"]')?.getBoundingClientRect();
+        if (!topLeft || !topCenter || !topRight || !boostBtn) {
+          return { ok: false, reason: 'Missing HUD or touch boost element' };
+        }
+        const hudTouchOverlap =
+          rectsOverlap(topLeft, boostBtn) ||
+          rectsOverlap(topCenter, boostBtn) ||
+          rectsOverlap(topRight, boostBtn);
+        const hudInternalOverlap =
+          rectsOverlap(topLeft, topCenter) ||
+          rectsOverlap(topCenter, topRight) ||
+          rectsOverlap(topLeft, topRight);
+        return {
+          ok: !hudTouchOverlap && !hudInternalOverlap,
+          hudTouchOverlap,
+          hudInternalOverlap,
+        };
+      });
+
+    const portraitCheck = await checkNoOverlap();
+    assert.equal(portraitCheck.ok, true, `Mobile portrait HUD/touch overlap check failed: ${JSON.stringify(portraitCheck)}`);
+
+    await page.setViewportSize({ width: 844, height: 390 });
+    await waitFrames(page, 2);
+    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'race-mobile-landscape.png') });
+
+    const landscapeCheck = await checkNoOverlap();
+    assert.equal(landscapeCheck.ok, true, `Mobile landscape HUD/touch overlap check failed: ${JSON.stringify(landscapeCheck)}`);
+
+    await fs.writeFile(
+      path.join(EVIDENCE_DIR, 'stage-3.1-e2e-results.json'),
+      JSON.stringify(
+        {
+          capturedAt: new Date().toISOString(),
+          finishRaceSummary: finishRes.race,
+          portraitOverlap: false,
+          landscapeOverlap: false,
+          consoleErrors,
+          pageErrors,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    assert.deepEqual(consoleErrors, [], 'Zero console errors allowed in Stage 3.1 E2E');
+    assert.deepEqual(pageErrors, [], 'Zero page errors allowed in Stage 3.1 E2E');
+  } finally {
+    await context.close();
+  }
+});

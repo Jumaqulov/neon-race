@@ -1,4 +1,4 @@
-import type { KeyboardEvent, PointerEvent } from 'react';
+import { ModeSelect } from './ModeSelect.tsx';
 import type { GameCommand, GameSnapshot } from '../shared/types.ts';
 
 export interface StartScreenProps {
@@ -7,50 +7,41 @@ export interface StartScreenProps {
 }
 
 export function StartScreen({ snapshot, onCommand }: StartScreenProps) {
-  const { started, ready, error, loadingStatus, touchMode } = snapshot;
+  const { started, ready, error, loadingStatus, mode } = snapshot;
 
-  const handleAction = () => {
-    if (error) {
-      window.location.reload();
-      return;
-    }
-    onCommand({ type: 'START' });
+  const handleReload = () => {
+    window.location.reload();
   };
-
-  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    handleAction();
-  };
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.code === 'Enter' || e.code === 'Space') {
-      e.preventDefault();
-      e.stopPropagation();
-      handleAction();
-    }
-  };
-
-  const buttonLabel = error
-    ? 'Qayta yuklash'
-    : !ready
-      ? 'Dvigatel yuklanmoqda…'
-      : touchMode
-        ? 'Boshlash'
-        : 'O‘yinni boshlash';
 
   return (
     <div id="splash" className={started && !error ? 'hide' : ''}>
-      <div className="card panel">
-        <div className="eyebrow">V3 · PHYSICS &amp; GRAPHICS EDITION</div>
-        <h1>
-          Muscle Car
-          <br />
-          Proving Ground
-        </h1>
+      <div className="card panel start-menu-card">
+        <div className="eyebrow">NEON RACE · STAGE 3.1 EDITION</div>
+        <h1>Neon Race</h1>
         <p>
-          To‘rtta g‘ildirak fizikasi, vazn ko‘chishi va mustaqil osma harakati. Zarba kuzovni bukadi, chiroqlarni
-          sindiradi va boshqaruvga ta’sir qiladi. V — o‘yin ichidagi sinov; Y — sekinlashtirish; F — ta’mirlash.
+          Yangi <strong>Poyga — Neon Circuit</strong> trassasida 3 aylanali poygada
+          bellashing yoki <strong>Poligon</strong> rejimida avtomobil fizikasi, drift va
+          shikastlanish tizimini erkin sinab ko‘ring.
         </p>
+
+        {!error ? (
+          <ModeSelect
+            selectedMode={mode}
+            ready={ready}
+            error={error}
+            onCommand={onCommand}
+          />
+        ) : (
+          <button
+            type="button"
+            id="go"
+            className="mode-start-btn proving"
+            onClick={handleReload}
+          >
+            Qayta yuklash
+          </button>
+        )}
+
         <div className="keys">
           <div>
             <kbd>W</kbd>
@@ -72,32 +63,24 @@ export function StartScreen({ snapshot, onCommand }: StartScreenProps) {
           </div>
           <span>Qo‘l tormozi</span>
           <div>
-            <kbd>T</kbd>
+            <kbd>E</kbd>
           </div>
-          <span>Sirpanish nazorati</span>
+          <span>Boost (Poyga)</span>
+          <div>
+            <kbd>R</kbd>
+          </div>
+          <span>Qaytarish</span>
           <div>
             <kbd>C</kbd>
           </div>
           <span>Kamera</span>
           <div>
-            <kbd>I</kbd>
+            <kbd>Esc</kbd>
           </div>
-          <span>Yaqindan ko‘rish</span>
-          <div>
-            <kbd>F</kbd>
-          </div>
-          <span>Ta’mirlash</span>
+          <span>Pauza</span>
         </div>
-        <div className="touch-note">Chapdagi tugmalar — rul. O‘ngda gaz va tormoz. HB — qo‘l tormozi.</div>
-        <div
-          id="go"
-          role="button"
-          tabIndex={0}
-          onClick={handleAction}
-          onPointerDown={handlePointerDown}
-          onKeyDown={handleKeyDown}
-        >
-          {buttonLabel}
+        <div className="touch-note">
+          Chapda rul · O‘ngda Gaz, Tormoz, HB va BOOST tugmalari.
         </div>
         <div id="loading-status" role={error ? 'alert' : undefined}>
           {loadingStatus}

@@ -1,8 +1,11 @@
 import { useEffect, useState, type PointerEvent } from 'react';
+import type { BoostStatus } from '../game/race/boostSystem.ts';
 import type { GameCommand, TouchControlKey } from '../shared/types.ts';
 
 export interface TouchControlsProps {
   onCommand: (command: GameCommand) => void;
+  showBoost?: boolean;
+  boostStatus?: BoostStatus;
 }
 
 const INITIAL_PRESSED: Record<TouchControlKey, boolean> = {
@@ -11,9 +14,14 @@ const INITIAL_PRESSED: Record<TouchControlKey, boolean> = {
   handbrake: false,
   brake: false,
   throttle: false,
+  boost: false,
 };
 
-export function TouchControls({ onCommand }: TouchControlsProps) {
+export function TouchControls({
+  onCommand,
+  showBoost = false,
+  boostStatus = 'empty',
+}: TouchControlsProps) {
   const [pressed, setPressed] = useState<Record<TouchControlKey, boolean>>(INITIAL_PRESSED);
 
   useEffect(() => {
@@ -82,6 +90,21 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
         </button>
       </div>
       <div className="tpad r">
+        {showBoost ? (
+          <button
+            type="button"
+            className={`tbtn boost-tbtn ${boostStatus}${pressed.boost ? ' down' : ''}`}
+            data-t="boost"
+            data-testid="touch-boost-btn"
+            aria-label="Boost"
+            onPointerDown={handleDown('boost')}
+            onPointerUp={handleUp('boost')}
+            onPointerCancel={handleUp('boost')}
+            onLostPointerCapture={handleUp('boost')}
+          >
+            BOOST
+          </button>
+        ) : null}
         <button
           type="button"
           className={`tbtn${pressed.handbrake ? ' down' : ''}`}

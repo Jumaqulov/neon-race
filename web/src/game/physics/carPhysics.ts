@@ -497,6 +497,14 @@ export class CarPhysics {
     }
     Fx -= p.drag * oldU * spd;
     Fy -= p.drag * oldV * spd;
+    const boostAccel = input.boostAccel ?? 0;
+    if (boostAccel > 0 && !hb && brk < 0.05 && (fwd || oldU > 0.25)) {
+      const maxBoostSpeed = input.boostMaxSpeed ?? 60.0;
+      if (oldU < maxBoostSpeed) {
+        const taper = clamp((maxBoostSpeed - oldU) / 6.0, 0, 1);
+        Fx += m * boostAccel * taper;
+      }
+    }
     // Damping only represents small drivetrain/bearing losses, not an artificial yaw lock.
     Mz -= oldR * 95;
     this.ax = Fx / m;
@@ -513,7 +521,7 @@ export class CarPhysics {
       this.r = lerp(this.r, yaw, blend);
       this.v = lerp(this.v, yaw * p.b, blend);
     }
-    if (thr < 0.015 && Math.abs(this.u) < 0.045 && Math.abs(this.v) < 0.045) {
+    if (thr < 0.015 && boostAccel <= 0 && Math.abs(this.u) < 0.045 && Math.abs(this.v) < 0.045) {
       this.u = this.v = this.r = 0;
     }
     const nc = Math.cos(this.heading);

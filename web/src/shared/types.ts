@@ -1,16 +1,22 @@
+import type { RaceSessionSnapshot } from '../game/race/raceSession.ts';
+
+export type GameMode = 'proving_ground' | 'neon_circuit';
+
 export interface GameInput {
   throttle?: number;
   brake?: number;
   steer?: number;
   handbrake?: boolean;
   analog?: boolean;
+  boostAccel?: number;
+  boostMaxSpeed?: number;
 }
 
 export type TurnSignalMode = 'off' | 'left' | 'right';
 export type QualityMode = 'auto' | 'high' | 'medium' | 'low';
 export type SurfaceType = 'concrete' | 'tyres' | 'pole';
 export type DamageZoneName = 'front' | 'rear' | 'left' | 'right';
-export type TouchControlKey = 'throttle' | 'brake' | 'left' | 'right' | 'handbrake';
+export type TouchControlKey = 'throttle' | 'brake' | 'left' | 'right' | 'handbrake' | 'boost';
 
 export interface GameSettings {
   cam: number;
@@ -128,6 +134,7 @@ export interface ClusterTelemetry {
 }
 
 export interface GameSnapshot {
+  mode: GameMode;
   ready: boolean;
   started: boolean;
   paused: boolean;
@@ -148,10 +155,17 @@ export interface GameSnapshot {
   damage: DamageState;
   drift: DriftHudState;
   telemetry: ClusterTelemetry;
+  race: RaceSessionSnapshot | null;
 }
 
 export type GameCommand =
-  | { type: 'START' }
+  | { type: 'START'; mode?: GameMode }
+  | { type: 'SELECT_MODE'; mode: GameMode }
+  | { type: 'START_RACE' }
+  | { type: 'RESTART_RACE' }
+  | { type: 'RETURN_TO_MENU' }
+  | { type: 'RESPAWN_RACE' }
+  | { type: 'ACTIVATE_BOOST' }
   | { type: 'HOTKEY'; code: string }
   | { type: 'SET_PAINT'; color: number }
   | { type: 'TOUCH_INPUT'; control: TouchControlKey; active: boolean }

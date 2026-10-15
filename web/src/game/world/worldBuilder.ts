@@ -87,7 +87,7 @@ export function updateCones(cones: DynamicCone[], dt: number): void {
   }
 }
 
-export function buildWorld(scene: THREE.Scene, renderer: THREE.WebGLRenderer): WorldSceneData {
+export function buildWorld(scene: THREE.Object3D, renderer: THREE.WebGLRenderer): WorldSceneData {
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
   const colliders: { circles: CircleCollider[] } = { circles: [] };
 
@@ -480,7 +480,7 @@ export function buildWorld(scene: THREE.Scene, renderer: THREE.WebGLRenderer): W
   return { colliders, cones, lampMat, winMat, asphalt };
 }
 
-export function instanceCones(scene: THREE.Scene, world: WorldSceneData): void {
+export function instanceCones(scene: THREE.Object3D, world: WorldSceneData): void {
   const cones = world.cones;
   const parts = cones[0].tiltObj.children as THREE.Mesh[];
   world.coneInstances = parts.map((p) => {

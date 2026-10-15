@@ -1,4 +1,5 @@
 import { ARENA, type SurfaceType } from '../../shared/types.ts';
+import type { BarrierSegment } from '../race/trackDefinition.ts';
 import type { CarPhysics } from './carPhysics.ts';
 
 export interface CircleCollider {
@@ -88,32 +89,107 @@ export function collideCircle(phys: CarPhysics, c: CircleCollider): number {
   );
 }
 
-export function collide(phys: CarPhysics, colliderGrid: ColliderGrid, arena = ARENA): number {
+export function collideBarrierSegments(
+  phys: CarPhysics,
+  segments: readonly BarrierSegment[],
+): number {
+  let maxJ = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    const corners = phys.corners();
+    let bestDepth = 0;
+    let bestPx = 0;
+    let bestPy = 0;
+    let bestNx = 0;
+    let bestNy = 0;
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const mx = (seg.ax + seg.bx) * 0.5;
+      const my = (seg.ay + seg.by) * 0.5;
+      const cdx = phys.x - mx;
+      const cdy = phys.y - my;
+      if (cdx * cdx + cdy * cdy > 64) continue;
+
+      const abx = seg.bx - seg.ax;
+      const aby = seg.by - seg.ay;
+      const lenSq = abx * abx + aby * aby;
+      if (lenSq <= 1e-6) continue;
+
+      let segTouchCount = 0;
+      let sumPx = 0;
+      let sumPy = 0;
+      let segMaxDepth = 0;
+
+      for (let k = 0; k < corners.length; k++) {
+        const wx = corners[k][0];
+        const wy = corners[k][1];
+        const u = ((wx - seg.ax) * abx + (wy - seg.ay) * aby) / lenSq;
+        if (u < -0.02 || u > 1.02) continue;
+
+        const signedDist = (wx - seg.ax) * seg.nx + (wy - seg.ay) * seg.ny;
+        if (signedDist < seg.halfThickness && signedDist > -3.5) {
+          const depth = seg.halfThickness - signedDist;
+          segTouchCount++;
+          sumPx += wx;
+          sumPy += wy;
+          if (depth > segMaxDepth) {
+            segMaxDepth = depth;
+          }
+        }
+      }
+
+      if (segTouchCount > 0 && segMaxDepth > bestDepth) {
+        bestDepth = segMaxDepth;
+        bestPx = sumPx / segTouchCount;
+        bestPy = sumPy / segTouchCount;
+        bestNx = seg.nx;
+        bestNy = seg.ny;
+      }
+    }
+
+    if (bestDepth <= 0) break;
+    const j = phys.contact(bestPx, bestPy, bestNx, bestNy, bestDepth, 0.08, 0.22, 'concrete');
+    if (j > maxJ) maxJ = j;
+  }
+  return maxJ;
+}
+
+export function collide(
+  phys: CarPhysics,
+  colliderGrid: ColliderGrid,
+  arena = ARENA,
+  barrierSegments?: readonly BarrierSegment[],
+): number {
   let j = 0;
+  if (barrierSegments && barrierSegments.length > 0) {
+    j = Math.max(j, collideBarrierSegments(phys, barrierSegments));
+  }
   // A face-on wall hit uses a contact manifold centroid, not whichever
   // corner happens to be visited first. Oblique hits retain their yaw moment.
-  const wallAxes: Array<[0 | 1, 1 | -1]> = [
-    [0, 1],
-    [0, -1],
-    [1, 1],
-    [1, -1],
-  ];
-  for (const [axis, sign] of wallAxes) {
-    const touching = phys.corners().filter((p) => p[axis] * sign > arena);
-    if (!touching.length) continue;
-    let px = 0;
-    let py = 0;
-    let depth = 0;
-    for (const p of touching) {
-      px += p[0];
-      py += p[1];
-      depth = Math.max(depth, p[axis] * sign - arena);
+  if (Number.isFinite(arena) && arena > 0) {
+    const wallAxes: Array<[0 | 1, 1 | -1]> = [
+      [0, 1],
+      [0, -1],
+      [1, 1],
+      [1, -1],
+    ];
+    for (const [axis, sign] of wallAxes) {
+      const touching = phys.corners().filter((p) => p[axis] * sign > arena);
+      if (!touching.length) continue;
+      let px = 0;
+      let py = 0;
+      let depth = 0;
+      for (const p of touching) {
+        px += p[0];
+        py += p[1];
+        depth = Math.max(depth, p[axis] * sign - arena);
+      }
+      px /= touching.length;
+      py /= touching.length;
+      const nx = axis === 0 ? -sign : 0;
+      const ny = axis === 1 ? -sign : 0;
+      j = Math.max(j, phys.contact(px, py, nx, ny, depth, 0.10, 0.30, 'concrete'));
     }
-    px /= touching.length;
-    py /= touching.length;
-    const nx = axis === 0 ? -sign : 0;
-    const ny = axis === 1 ? -sign : 0;
-    j = Math.max(j, phys.contact(px, py, nx, ny, depth, 0.10, 0.30, 'concrete'));
   }
   for (const c of colliderGrid.query(phys.x, phys.y)) {
     j = Math.max(j, collideCircle(phys, c));

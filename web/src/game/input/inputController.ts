@@ -119,7 +119,7 @@ export interface InputCallbacks {
   onInputReset?: () => void;
 }
 
-const TOUCH_KEYS: readonly TouchControlKey[] = ['throttle', 'brake', 'left', 'right', 'handbrake'];
+const TOUCH_KEYS: readonly TouchControlKey[] = ['throttle', 'brake', 'left', 'right', 'handbrake', 'boost'];
 
 export class InputController {
   public readonly keys: Record<string, boolean> = {};
@@ -129,6 +129,7 @@ export class InputController {
     left: 0,
     right: 0,
     handbrake: 0,
+    boost: 0,
   };
   private padCamWas = false;
   private attached = false;

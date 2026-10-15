@@ -171,6 +171,15 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
           <kbd>Esc</kbd>
           <span className="v">{paused ? '▶' : 'Ⅱ'}</span>
         </button>
+        <button
+          type="button"
+          className="tb"
+          data-testid="proving-menu-btn"
+          title="Asosiy menyuga qaytish"
+          onClick={() => onCommand({ type: 'RETURN_TO_MENU' })}
+        >
+          <span className="v">Menyu</span>
+        </button>
       </div>
 
       <div id="performance" className="panel" aria-live="off">

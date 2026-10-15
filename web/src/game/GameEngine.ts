@@ -6,6 +6,7 @@ import {
   START_POSE,
   type GameCommand,
   type GameInput,
+  type GameMode,
   type GameSettings,
   type GameSnapshot,
 } from '../shared/types.ts';
@@ -18,16 +19,29 @@ import { ExhaustSmoke, SkidMarks, Smoke, type ExhaustSnapshot } from './effects/
 import { InputController } from './input/inputController.ts';
 import { CarPhysics, clamp, lerp } from './physics/carPhysics.ts';
 import { ColliderGrid, collide } from './physics/collisions.ts';
+import { RaceSession, type RaceSessionSnapshot } from './race/raceSession.ts';
+import { NEON_CIRCUIT_TRACK } from './race/trackDefinition.ts';
 import { AdaptiveQuality } from './rendering/adaptiveQuality.ts';
 import { applySkyTheme, isMeshObject, lin, makeSkyMaterial, mergeRigidMeshes, THEMES } from './rendering/batching.ts';
 import { GaugeRenderer } from './rendering/gauges.ts';
 import { isSpriteObject, ResourceTracker } from './rendering/resourceTracker.ts';
 import { createMuscleCar, optimizeCarMeshes, type MuscleCarModel } from './vehicle/muscleCar.ts';
-import { buildWorld, instanceCones, resetCone, syncConeInstances, updateCones, type WorldSceneData } from './world/worldBuilder.ts';
+import { buildNeonCircuitWorld, type NeonCircuitWorld } from './world/neonCircuit.ts';
+import { buildWorld, instanceCones, resetCone, syncConeInstances, updateCones, type WorldSceneData } from './world/provingGround.ts';
 
 export interface CarLabDiagnosticAPI {
   version: string;
+  mode: () => GameMode;
   snapshot: () => DamageSnapshot | null;
+  race: () => RaceSessionSnapshot | null;
+  track: () => {
+    id: string;
+    totalLength: number;
+    roadWidth: number;
+    checkpoints: number;
+    boostPads: number;
+    samples: Array<{ s: number; x: number; y: number; heading: number }>;
+  };
   physics: () => {
     x: number;
     y: number;
@@ -58,6 +72,8 @@ export interface CarLabDiagnosticAPI {
     fps: number;
     savedDrawObjects: number;
   };
+  stepWithInput: (input: GameInput, dt?: number) => void;
+  activateBoost: () => void;
   readonly rendererInfo: { calls: number; triangles: number; geometries: number; textures: number };
 }
 
@@ -76,6 +92,7 @@ declare global {
 export interface GameEngineOptions {
   headless?: boolean;
   storage?: StorageAdapter | null;
+  initialMode?: GameMode;
 }
 
 const STEP = 1 / 120;
@@ -83,12 +100,20 @@ const fmt = (n: number): string => Math.round(n).toLocaleString('en-US');
 
 function detectTouchDevice(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  if (window.innerWidth > 0 && (window.innerWidth <= 640 || window.innerHeight <= 450)) {
+    return true;
+  }
   return (
     window.matchMedia('(pointer: coarse)').matches ||
     (typeof navigator !== 'undefined' &&
       navigator.maxTouchPoints > 0 &&
       !window.matchMedia('(pointer: fine)').matches)
   );
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 export class GameEngine {
@@ -99,14 +124,20 @@ export class GameEngine {
   public readonly cameraCtrl: CameraController;
   public readonly gauges: GaugeRenderer;
   public readonly resources: ResourceTracker;
+  public readonly raceSession: RaceSession;
 
   private readonly headless: boolean;
   private readonly storage: StorageAdapter | null | undefined;
   private readonly listeners = new Set<() => void>();
 
+  private mode: GameMode = 'proving_ground';
   private container: HTMLElement | null = null;
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
+  private provingGroundGroup: THREE.Group | null = null;
+  private neonCircuitWorld: NeonCircuitWorld | null = null;
+  private neonColliderGrid: ColliderGrid;
+  private boostTrailGroup: THREE.Group | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
   private hemi: THREE.HemisphereLight | null = null;
   private sun: THREE.DirectionalLight | null = null;
@@ -155,6 +186,9 @@ export class GameEngine {
   private hudT = 0;
   private clusterT = 0;
   private impactFlashT = 0;
+  private activeBoostAccel = 0;
+  private activeBoostMaxSpeed = 60.0;
+  private boostFovOffset = 0;
 
   private readonly previousPose = {
     x: START_POSE[0],
@@ -195,7 +229,12 @@ export class GameEngine {
     if (typeof document !== 'undefined' && document.hidden) {
       this.input.clearAll();
       this.acc = 0;
-      if (this.started) this.paused = true;
+      if (this.started) {
+        this.paused = true;
+        if (this.mode === 'neon_circuit') {
+          this.raceSession.pause();
+        }
+      }
       this.audio.suspend();
     }
     this.lastTime = typeof performance !== 'undefined' ? performance.now() : 0;
@@ -207,6 +246,9 @@ export class GameEngine {
     e.preventDefault();
     this.contextLost = true;
     this.paused = true;
+    if (this.mode === 'neon_circuit') {
+      this.raceSession.pause();
+    }
     this.toast('Grafik kontekst uzildi. Tiklanish kutilmoqda.');
   };
 
@@ -225,12 +267,15 @@ export class GameEngine {
   constructor(options: GameEngineOptions = {}) {
     this.headless = Boolean(options.headless);
     this.storage = options.storage;
+    this.mode = options.initialMode ?? 'proving_ground';
     this.settings = loadInitialSettings(this.storage);
     this.drift.best = Number(store.get('best', 0, this.storage)) || 0;
     this.touchMode = detectTouchDevice();
     this.phys = new CarPhysics({ tcs: this.settings.tcs });
     this.phys.reset(...START_POSE);
     this.colliderGrid = new ColliderGrid([]);
+    this.neonColliderGrid = new ColliderGrid([]);
+    this.raceSession = new RaceSession(NEON_CIRCUIT_TRACK);
     this.audio = new SoundEngine();
     this.cameraCtrl = new CameraController();
     this.gauges = new GaugeRenderer();
@@ -241,6 +286,12 @@ export class GameEngine {
       onToggleKey: (code) => this.toggleKey(code),
       onInputReset: () => this.emitSnapshot(),
     });
+    if (this.mode === 'neon_circuit') {
+      this.raceSession.resetToReady();
+      const sp = NEON_CIRCUIT_TRACK.startSpawn;
+      this.phys.reset(sp.x, sp.y, sp.heading);
+      this.resetRenderPose();
+    }
     this.cachedSnapshot = this.buildSnapshot();
   }
 
@@ -408,16 +459,32 @@ export class GameEngine {
       this.envTargets = envTargets;
       this.envs = envs;
 
-      const world = buildWorld(scene, renderer);
-      this.resources.captureTree(scene);
-      instanceCones(scene, world);
-      const worldSavedDraws = mergeRigidMeshes(scene);
-      this.resources.captureTree(scene);
+      const provingGroundGroup = new THREE.Group();
+      provingGroundGroup.name = 'ProvingGroundWorld';
+      scene.add(provingGroundGroup);
+      this.provingGroundGroup = provingGroundGroup;
+
+      const world = buildWorld(provingGroundGroup, renderer);
+      this.resources.captureTree(provingGroundGroup);
+      instanceCones(provingGroundGroup, world);
+      const worldSavedDraws = mergeRigidMeshes(provingGroundGroup);
+      this.resources.captureTree(provingGroundGroup);
       for (const cone of world.cones) {
         this.resources.captureTree(cone.obj);
       }
       this.world = world;
       this.colliderGrid = new ColliderGrid(world.colliders.circles);
+
+      const neonWorld = buildNeonCircuitWorld(
+        NEON_CIRCUIT_TRACK,
+        renderer.capabilities.getMaxAnisotropy(),
+      );
+      neonWorld.group.visible = this.mode === 'neon_circuit';
+      provingGroundGroup.visible = this.mode === 'proving_ground';
+      scene.add(neonWorld.group);
+      this.resources.captureTree(neonWorld.group);
+      this.neonCircuitWorld = neonWorld;
+      this.neonColliderGrid = new ColliderGrid(neonWorld.colliders);
 
       const quality = new AdaptiveQuality(renderer, sun, skyMat, width, height);
       this.quality = quality;
@@ -436,6 +503,25 @@ export class GameEngine {
           obj.userData.ownsGeometry = true;
         }
       });
+
+      // Attach neon boost exhaust & light trail meshes to the rear of the car
+      const boostTrailGroup = new THREE.Group();
+      boostTrailGroup.visible = false;
+      const flameGeo = new THREE.ConeGeometry(0.11, 0.95, 10);
+      flameGeo.rotateX(-Math.PI / 2);
+      const flameMat = new THREE.MeshBasicMaterial({
+        color: 0x00ffd5,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const leftFlame = new THREE.Mesh(flameGeo, flameMat);
+      leftFlame.position.set(-2.7, 0.32, -0.46);
+      const rightFlame = new THREE.Mesh(flameGeo, flameMat);
+      rightFlame.position.set(-2.7, 0.32, 0.46);
+      boostTrailGroup.add(leftFlame, rightFlame);
+      car.group.add(boostTrailGroup);
+      this.boostTrailGroup = boostTrailGroup;
+
       this.resources.captureTree(car.group);
       scene.add(car.group);
       quality.savedDraws = worldSavedDraws + optimizeCarMeshes(car) + (world.cones.length * 3 - 3);
@@ -449,12 +535,21 @@ export class GameEngine {
       this.resources.captureTree(scene);
 
       this.phys.onImpact = (event) => this.damage?.enqueue(event);
-      this.phys.reset(...START_POSE);
+      if (this.mode === 'neon_circuit') {
+        const sp = NEON_CIRCUIT_TRACK.startSpawn;
+        this.phys.reset(sp.x, sp.y, sp.heading);
+        this.applyTheme(true);
+      } else {
+        this.phys.reset(...START_POSE);
+        this.applyTheme(false);
+      }
       this.resetRenderPose();
-      this.applyTheme(false);
 
       this.input.attach();
-      this.cameraCtrl.attach(renderer.domElement, () => this.started && this.settings.cam === 4);
+      this.cameraCtrl.attach(
+        renderer.domElement,
+        () => this.started && this.mode === 'proving_ground' && this.settings.cam === 4,
+      );
 
       renderer.domElement.addEventListener('pointerdown', this.handleCanvasPointerDown);
       renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost);
@@ -474,7 +569,7 @@ export class GameEngine {
 
       this.registerGlobalDiagnostics();
       this.ready = true;
-      this.loadingStatus = 'WASD: haydash · V: sinov · G: grafika · Y: 0.25× · Esc: pauza';
+      this.loadingStatus = 'WASD: haydash · E: boost · R: qaytarish · Esc: pauza';
       this.emitSnapshot();
 
       this.lastTime = performance.now();
@@ -500,8 +595,23 @@ export class GameEngine {
     if (typeof window === 'undefined') return;
     const getRenderer = (): THREE.WebGLRenderer | null => this.renderer;
     const api: CarLabDiagnosticAPI = Object.freeze({
-      version: 'physics-graphics-3.0',
+      version: 'physics-graphics-3.1',
+      mode: () => this.mode,
       snapshot: () => (this.damage ? this.damage.snapshot() : null),
+      race: () => (this.mode === 'neon_circuit' ? this.raceSession.getSnapshot() : null),
+      track: () => ({
+        id: NEON_CIRCUIT_TRACK.id,
+        totalLength: NEON_CIRCUIT_TRACK.totalLength,
+        roadWidth: NEON_CIRCUIT_TRACK.roadWidth,
+        checkpoints: NEON_CIRCUIT_TRACK.checkpoints.length,
+        boostPads: NEON_CIRCUIT_TRACK.boostPads.length,
+        samples: NEON_CIRCUIT_TRACK.samples.map((s) => ({
+          s: s.s,
+          x: s.x,
+          y: s.y,
+          heading: s.heading,
+        })),
+      }),
       physics: () => ({
         x: this.phys.x,
         y: this.phys.y,
@@ -550,6 +660,25 @@ export class GameEngine {
         fps: this.quality ? this.quality.fps : 60,
         savedDrawObjects: this.quality ? this.quality.savedDraws : 0,
       }),
+      stepWithInput: (input: GameInput, dt = STEP) => {
+        this.rememberPose();
+        this.advanceSimulation(input, dt);
+        this.renderAlpha = 1;
+        this.syncCar();
+        if (this.neonCircuitWorld && this.mode === 'neon_circuit') {
+          const raceSnap = this.raceSession.getSnapshot();
+          this.neonCircuitWorld.update({
+            time: this.damage ? this.damage.time : this.phys.time,
+            nextCheckpointIndex: raceSnap.checkpoint.nextCheckpointIndex,
+            availablePadIds: raceSnap.boost.availablePadIds,
+            countdownNumber: raceSnap.countdownNumber,
+          });
+        }
+        this.emitSnapshot();
+      },
+      activateBoost: () => {
+        this.activateBoost();
+      },
       get rendererInfo() {
         const r = getRenderer();
         return {
@@ -578,9 +707,58 @@ export class GameEngine {
     }
   }
 
-  start(): void {
-    if (this.disposed || this.started || this.error) return;
+  public getMode(): GameMode {
+    return this.mode;
+  }
+
+  public setMode(mode: GameMode): void {
+    if (this.disposed) return;
+    this.mode = mode;
+    this.paused = false;
+    this.slowMotion = false;
+    this.helpOpen = false;
+    this.activeBoostAccel = 0;
+    if (this.boostTrailGroup) {
+      this.boostTrailGroup.visible = false;
+    }
+    if (this.provingGroundGroup) {
+      this.provingGroundGroup.visible = mode === 'proving_ground';
+    }
+    if (this.neonCircuitWorld) {
+      this.neonCircuitWorld.group.visible = mode === 'neon_circuit';
+    }
+    if (mode === 'neon_circuit') {
+      if (this.settings.cam === 4) {
+        this.settings.cam = 0;
+      }
+      this.applyTheme(true);
+      this.raceSession.resetToReady();
+      const sp = NEON_CIRCUIT_TRACK.startSpawn;
+      this.resetCarToPose(sp.x, sp.y, sp.heading);
+      this.loadingStatus = 'WASD: haydash · E: boost · R: qaytarish · Esc: pauza';
+    } else {
+      this.applyTheme(false);
+      this.resetCar();
+      this.loadingStatus = 'WASD: haydash · V: sinov · G: grafika · Y: 0.25× · Esc: pauza';
+    }
+    this.emitSnapshot();
+  }
+
+  start(mode?: GameMode): void {
+    if (this.disposed || this.error) return;
+    if (mode && mode !== this.mode) {
+      this.setMode(mode);
+    } else if (this.started && !mode) {
+      return;
+    }
     this.started = true;
+    this.paused = false;
+    if (this.mode === 'neon_circuit') {
+      this.applyTheme(true);
+      this.raceSession.resetToReady();
+      const sp = NEON_CIRCUIT_TRACK.startSpawn;
+      this.resetCarToPose(sp.x, sp.y, sp.heading);
+    }
     if (!this.headless) {
       const ok = this.audio.init(this.settings.sound);
       if (!ok) {
@@ -599,8 +777,84 @@ export class GameEngine {
     this.emitSnapshot();
   }
 
+  public startRaceCountdown(): void {
+    if (this.disposed || this.error) return;
+    if (this.mode !== 'neon_circuit') {
+      this.setMode('neon_circuit');
+    }
+    if (!this.started) {
+      this.started = true;
+      if (!this.headless) {
+        const ok = this.audio.init(this.settings.sound);
+        if (ok && !this.settings.sound) {
+          this.audio.setEnabled(false);
+        }
+      }
+    }
+    this.paused = false;
+    this.slowMotion = false;
+    this.activeBoostAccel = 0;
+    if (this.boostTrailGroup) {
+      this.boostTrailGroup.visible = false;
+    }
+    const sp = NEON_CIRCUIT_TRACK.startSpawn;
+    this.resetCarToPose(sp.x, sp.y, sp.heading);
+    this.raceSession.startCountdown();
+    this.audio.resume();
+    this.focusCanvas();
+    this.emitSnapshot();
+  }
+
+  public returnToMenu(): void {
+    if (this.disposed) return;
+    this.input.clearAll();
+    this.started = false;
+    this.paused = false;
+    this.slowMotion = false;
+    this.helpOpen = false;
+    this.activeBoostAccel = 0;
+    if (this.boostTrailGroup) {
+      this.boostTrailGroup.visible = false;
+    }
+    if (this.mode === 'neon_circuit') {
+      this.raceSession.resetToReady();
+      const sp = NEON_CIRCUIT_TRACK.startSpawn;
+      this.resetCarToPose(sp.x, sp.y, sp.heading);
+    } else {
+      this.resetCar();
+    }
+    this.emitSnapshot();
+  }
+
+  public respawnRaceCar(): void {
+    if (this.disposed || this.mode !== 'neon_circuit') return;
+    const pose = this.raceSession.respawnAtLastCheckpoint();
+    if (!pose) return;
+    this.activeBoostAccel = 0;
+    if (this.boostTrailGroup) {
+      this.boostTrailGroup.visible = false;
+    }
+    this.resetCarToPose(pose.x, pose.y, pose.heading);
+    this.paused = false;
+    this.audio.resume();
+    this.toast('Trassaga qaytarildi (+5s jarima)');
+    this.focusCanvas();
+    this.emitSnapshot();
+  }
+
+  public activateBoost(): void {
+    if (this.disposed || this.mode !== 'neon_circuit' || !this.started || this.paused) return;
+    this.raceSession.requestBoost();
+    this.emitSnapshot();
+  }
+
   pause(): void {
     if (this.disposed || this.paused) return;
+    if (this.mode === 'neon_circuit') {
+      const phase = this.raceSession.getPhase();
+      if (phase === 'ready' || phase === 'finished') return;
+      this.raceSession.pause();
+    }
     this.paused = true;
     this.acc = 0;
     this.audio.suspend();
@@ -609,14 +863,23 @@ export class GameEngine {
 
   resume(): void {
     if (this.disposed || !this.paused) return;
+    if (this.mode === 'neon_circuit') {
+      this.raceSession.resume();
+    }
     this.paused = false;
     this.acc = 0;
     this.audio.resume();
+    this.focusCanvas();
     this.emitSnapshot();
   }
 
   resize(width: number, height: number): void {
     if (this.disposed || width <= 0 || height <= 0) return;
+    const nextTouch = detectTouchDevice() || width <= 640 || height <= 450;
+    if (nextTouch !== this.touchMode) {
+      this.touchMode = nextTouch;
+      this.emitSnapshot();
+    }
     if (this.camera) {
       this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
@@ -634,7 +897,23 @@ export class GameEngine {
     if (this.disposed) return;
     switch (command.type) {
       case 'START':
-        this.start();
+        this.start(command.mode);
+        break;
+      case 'SELECT_MODE':
+        this.setMode(command.mode);
+        break;
+      case 'START_RACE':
+      case 'RESTART_RACE':
+        this.startRaceCountdown();
+        break;
+      case 'RETURN_TO_MENU':
+        this.returnToMenu();
+        break;
+      case 'RESPAWN_RACE':
+        this.respawnRaceCar();
+        break;
+      case 'ACTIVATE_BOOST':
+        this.activateBoost();
         break;
       case 'HOTKEY':
         if (!this.started) this.start();
@@ -645,6 +924,9 @@ export class GameEngine {
         break;
       case 'TOUCH_INPUT':
         this.input.setTouch(command.control, command.active);
+        if (command.control === 'boost' && command.active) {
+          this.activateBoost();
+        }
         break;
       case 'TOGGLE_HELP':
         this.helpOpen = !this.helpOpen;
@@ -739,12 +1021,26 @@ export class GameEngine {
 
   public toggleKey(code: string): void {
     if (this.disposed) return;
+    const isRaceMode = this.mode === 'neon_circuit';
+
+    // Block Proving-Ground-only cheats/tools in Race mode
+    if (isRaceMode && (code === 'KeyF' || code === 'KeyV' || code === 'KeyY' || code === 'KeyI' || code === 'KeyN')) {
+      return;
+    }
+
     switch (code) {
-      case 'KeyC':
-        this.settings.cam = (this.settings.cam + 1) % CAMS.length;
+      case 'KeyE':
+        if (isRaceMode) {
+          this.activateBoost();
+        }
+        return;
+      case 'KeyC': {
+        const maxCams = isRaceMode ? 4 : CAMS.length;
+        this.settings.cam = (this.settings.cam + 1) % maxCams;
         store.set('cam', this.settings.cam, this.storage);
         this.toast('Camera · ' + CAMS[this.settings.cam]);
         break;
+      }
       case 'KeyT':
         this.settings.tcs = this.phys.p.tcs = !this.phys.p.tcs;
         store.set('tcs', this.settings.tcs, this.storage);
@@ -769,6 +1065,10 @@ export class GameEngine {
         store.set('mph', this.settings.mph, this.storage);
         break;
       case 'KeyR':
+        if (isRaceMode) {
+          this.respawnRaceCar();
+          return;
+        }
         this.resetCar();
         this.toast('Reset');
         break;
@@ -824,6 +1124,18 @@ export class GameEngine {
         this.toast(this.slowMotion ? 'Sekinlashtirish: 0.25×' : 'Oddiy tezlik: 1×');
         break;
       case 'Escape':
+        if (isRaceMode) {
+          const phase = this.raceSession.getPhase();
+          if (phase === 'ready' || phase === 'finished') {
+            return;
+          }
+          if (this.paused) {
+            this.resume();
+          } else {
+            this.pause();
+          }
+          return;
+        }
         this.paused = !this.paused;
         this.acc = 0;
         if (this.paused) this.audio.suspend();
@@ -875,26 +1187,31 @@ export class GameEngine {
     this.cameraCtrl.camShake = 0;
   }
 
-  public resetCar(): void {
-    if (this.disposed) return;
+  private resetCarToPose(x: number, y: number, heading: number): void {
     this.repairCar();
-    this.phys.reset(...START_POSE);
+    this.phys.reset(x, y, heading);
     this.exhaust?.clear();
     this.resetRenderPose();
-    if (this.world) {
-      this.world.cones.forEach(resetCone);
-      this.world.conesDirty = true;
-      syncConeInstances(this.world, true);
-    }
     this.skids?.clear();
-    this.stats.cones = 0;
+    this.cameraCtrl.camYaw = 0;
     this.drift.cur = 0;
     this.drift.time = 0;
     this.drift.mult = 1;
   }
 
-  public launchCrashTest(): void {
+  public resetCar(): void {
     if (this.disposed) return;
+    this.resetCarToPose(START_POSE[0], START_POSE[1], START_POSE[2]);
+    if (this.world) {
+      this.world.cones.forEach(resetCone);
+      this.world.conesDirty = true;
+      syncConeInstances(this.world, true);
+    }
+    this.stats.cones = 0;
+  }
+
+  public launchCrashTest(): void {
+    if (this.disposed || this.mode === 'neon_circuit') return;
     this.repairCar();
     this.exhaust?.clear();
     this.skids?.breakAll();
@@ -927,7 +1244,7 @@ export class GameEngine {
   }
 
   private hitCones(): void {
-    if (!this.world) return;
+    if (!this.world || this.mode !== 'proving_ground') return;
     const ch = Math.cos(this.phys.heading);
     const sh = Math.sin(this.phys.heading);
     const [vx, vy] = this.phys.worldVel();
@@ -973,6 +1290,142 @@ export class GameEngine {
 
   public advanceSimulation(input: GameInput, h: number): number {
     if (this.disposed) return 0;
+
+    if (this.mode === 'neon_circuit') {
+      const phase = this.raceSession.getPhase();
+      if (phase === 'ready' || phase === 'paused') {
+        this.phys.u = 0;
+        this.phys.v = 0;
+        this.phys.r = 0;
+        this.activeBoostAccel = 0;
+        return 0;
+      }
+
+      if (phase === 'countdown') {
+        this.phys.u = 0;
+        this.phys.v = 0;
+        this.phys.r = 0;
+        this.activeBoostAccel = 0;
+        const res = this.raceSession.step({
+          x: this.phys.x,
+          y: this.phys.y,
+          heading: this.phys.heading,
+          vx: 0,
+          vy: 0,
+          forwardSpeed: 0,
+          forwardInput: false,
+          brakeInput: false,
+          handbrakeInput: false,
+          dt: h,
+        });
+        if (res.countdownTick !== null) {
+          this.audio.countdownBeep(res.countdownTick === 0);
+          this.emitSnapshot();
+        }
+        return 0;
+      }
+
+      if (phase === 'finished') {
+        this.activeBoostAccel = 0;
+        const finishInput: GameInput = {
+          throttle: 0,
+          brake: 0.85,
+          steer: 0,
+          handbrake: false,
+          boostAccel: 0,
+        };
+        const count = clamp(
+          Math.ceil(((this.phys.speed + Math.abs(this.phys.r) * 2.8) * h) / 0.14),
+          1,
+          8,
+        );
+        const sub = h / count;
+        let impact = 0;
+        for (let i = 0; i < count; i++) {
+          this.phys.step(finishInput, sub);
+          impact = Math.max(
+            impact,
+            collide(this.phys, this.neonColliderGrid, 0, NEON_CIRCUIT_TRACK.barrierSegments),
+          );
+          this.simulationSteps++;
+        }
+        const damp = Math.exp(-h * 3.5);
+        this.phys.u *= damp;
+        this.phys.v *= damp;
+        this.phys.r *= damp;
+        return impact;
+      }
+
+      // Active 'racing' phase
+      const forwardInput = (input.throttle ?? 0) > 0.05;
+      const brakeInput = (input.brake ?? 0) > 0.05;
+      const handbrakeInput = Boolean(input.handbrake);
+
+      const raceInput: GameInput = {
+        ...input,
+        boostAccel: input.boostAccel ?? this.activeBoostAccel,
+        boostMaxSpeed: input.boostMaxSpeed ?? this.activeBoostMaxSpeed,
+      };
+
+      const count = clamp(
+        Math.ceil(((this.phys.speed + Math.abs(this.phys.r) * 2.8) * h) / 0.14),
+        1,
+        8,
+      );
+      const sub = h / count;
+      let impact = 0;
+      for (let i = 0; i < count; i++) {
+        this.phys.step(raceInput, sub);
+        impact = Math.max(
+          impact,
+          collide(this.phys, this.neonColliderGrid, 0, NEON_CIRCUIT_TRACK.barrierSegments),
+        );
+        this.simulationSteps++;
+      }
+
+      const [vx, vy] = this.phys.worldVel();
+      const raceRes = this.raceSession.step({
+        x: this.phys.x,
+        y: this.phys.y,
+        heading: this.phys.heading,
+        vx,
+        vy,
+        forwardSpeed: this.phys.u,
+        forwardInput,
+        brakeInput,
+        handbrakeInput,
+        dt: h,
+      });
+
+      this.activeBoostAccel = raceRes.boostAccel;
+      this.activeBoostMaxSpeed = raceRes.boostMaxSpeed;
+
+      if (raceRes.checkpointsPassed.length > 0) {
+        this.audio.checkpointChime();
+      }
+      if (raceRes.lapCompleted !== null) {
+        this.audio.lapChime(raceRes.raceFinished);
+      }
+      if (raceRes.boostPickedUp !== null) {
+        this.audio.boostPickup();
+      }
+      if (raceRes.boostActivated) {
+        this.audio.boostActivate();
+      }
+      if (
+        raceRes.checkpointsPassed.length > 0 ||
+        raceRes.lapCompleted !== null ||
+        raceRes.boostPickedUp !== null ||
+        raceRes.boostActivated ||
+        raceRes.raceFinished
+      ) {
+        this.emitSnapshot();
+      }
+
+      return impact;
+    }
+
+    // Default Proving Ground simulation
     const count = clamp(Math.ceil(((this.phys.speed + Math.abs(this.phys.r) * 2.8) * h) / 0.14), 1, 8);
     const sub = h / count;
     let impact = 0;
@@ -1008,6 +1461,15 @@ export class GameEngine {
     const s = this.phys.suspension;
     this.car.body.position.y = 0.45 + s.heave;
     this.car.body.rotation.set(s.roll, 0, s.pitch);
+    const isBoosting =
+      this.mode === 'neon_circuit' && this.raceSession.getSnapshot().boost.isActive;
+    if (this.boostTrailGroup) {
+      this.boostTrailGroup.visible = isBoosting;
+      if (isBoosting) {
+        const pulse = 0.85 + 0.25 * Math.sin(this.phys.time * 45);
+        this.boostTrailGroup.scale.set(1, 1, pulse);
+      }
+    }
     this.car.setLights({
       head: this.settings.lights,
       brake: this.phys.braking ? 1 : 0,
@@ -1122,7 +1584,10 @@ export class GameEngine {
     }
 
     const realDt = Math.min(0.1, rawDt);
-    const dt = this.paused ? 0 : realDt * (this.slowMotion ? 0.25 : 1);
+    const dt =
+      this.paused
+        ? 0
+        : realDt * (this.mode === 'proving_ground' && this.slowMotion ? 0.25 : 1);
     const input = this.started ? this.input.readInput() : {};
     this.acc += dt;
     let steps = 0;
@@ -1180,7 +1645,16 @@ export class GameEngine {
     this.metalShards?.update(dt);
     this.syncCar();
     this.car?.group.updateMatrixWorld(true);
-    if (this.world) syncConeInstances(this.world);
+    if (this.world && this.mode === 'proving_ground') syncConeInstances(this.world);
+    if (this.neonCircuitWorld && this.mode === 'neon_circuit') {
+      const raceSnap = this.raceSession.getSnapshot();
+      this.neonCircuitWorld.update({
+        time: this.damage ? this.damage.time : this.phys.time,
+        nextCheckpointIndex: raceSnap.checkpoint.nextCheckpointIndex,
+        availablePadIds: raceSnap.boost.availablePadIds,
+        countdownNumber: raceSnap.countdownNumber,
+      });
+    }
 
     if (this.parts && this.damage) {
       for (const hit of impacts) this.parts.handle(hit, this.damage.zones);
@@ -1197,7 +1671,9 @@ export class GameEngine {
     }
     if (breaks.length) this.audio.glass();
     if (dt > 0) this.updateEffects(dt);
-    if (this.started && !this.paused) this.updateDrift(dt);
+    if (this.started && !this.paused && this.mode === 'proving_ground') {
+      this.updateDrift(dt);
+    }
 
     if (
       this.car &&
@@ -1225,6 +1701,18 @@ export class GameEngine {
           this.engineVapor.mat.uniforms.scale as { value: number },
         ],
       );
+
+      // Subtle bounded FOV kick during active boost (respecting prefers-reduced-motion)
+      const boostActive =
+        this.mode === 'neon_circuit' &&
+        this.raceSession.getSnapshot().boost.isActive &&
+        !prefersReducedMotion();
+      const targetFovOffset = boostActive ? 6.5 : 0;
+      this.boostFovOffset += (targetFovOffset - this.boostFovOffset) * (1 - Math.exp(-realDt * 10));
+      if (this.boostFovOffset > 0.05) {
+        this.camera.fov = Math.min(76, this.camera.fov + this.boostFovOffset);
+        this.camera.updateProjectionMatrix();
+      }
     }
 
     if (!this.paused) {
@@ -1306,13 +1794,14 @@ export class GameEngine {
     const fps = this.quality ? Math.round(this.quality.fps) : 60;
 
     return {
+      mode: this.mode,
       ready: this.ready,
       started: this.started,
       paused: this.paused,
       slowMotion: this.slowMotion,
       helpOpen: this.helpOpen,
       touchMode: this.touchMode,
-      inspecting: this.started && this.settings.cam === 4,
+      inspecting: this.started && this.mode === 'proving_ground' && this.settings.cam === 4,
       error: this.error,
       loadingStatus: this.loadingStatus,
       toastMessage: this.toastMessage,
@@ -1370,6 +1859,7 @@ export class GameEngine {
         ax: this.phys.ax,
         ay: this.phys.ay,
       },
+      race: this.mode === 'neon_circuit' ? this.raceSession.getSnapshot() : null,
     };
   }
 
@@ -1446,6 +1936,12 @@ export class GameEngine {
           this.resources.captureTree(c.obj);
         }
       }
+      if (this.provingGroundGroup) {
+        this.resources.captureTree(this.provingGroundGroup);
+      }
+      if (this.neonCircuitWorld) {
+        this.resources.captureTree(this.neonCircuitWorld.group);
+      }
       if (this.car) {
         this.resources.captureTree(this.car.group);
       }
@@ -1496,6 +1992,9 @@ export class GameEngine {
     this.envTargets = null;
     this.envs = null;
     this.world = null;
+    this.provingGroundGroup = null;
+    this.neonCircuitWorld = null;
+    this.boostTrailGroup = null;
     this.car = null;
     this.damage = null;
     this.parts = null;

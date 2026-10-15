@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { GameHud } from '../components/GameHud.tsx';
 import { GameToolbar } from '../components/GameToolbar.tsx';
 import { GameViewport } from '../components/GameViewport.tsx';
+import { RaceHud } from '../components/race/RaceHud.tsx';
+import { RaceResults } from '../components/race/RaceResults.tsx';
 import { StartScreen } from '../components/StartScreen.tsx';
 import { TouchControls } from '../components/TouchControls.tsx';
 import { GameEngine } from '../game/GameEngine.ts';
@@ -38,8 +40,18 @@ export function App() {
     [engine],
   );
 
+  const handleRegisterGauges = useCallback(
+    (cluster: HTMLCanvasElement | null, gMeter: HTMLCanvasElement | null) => {
+      engine?.setGaugeCanvases(cluster, gMeter);
+    },
+    [engine],
+  );
+
+  const isRaceMode = snapshot?.mode === 'neon_circuit';
+
   const shellClasses = [
     'game-shell',
+    isRaceMode ? 'race-mode' : 'proving-mode',
     snapshot?.helpOpen ? 'help-open' : '',
     snapshot?.touchMode ? 'touch' : '',
     snapshot?.inspecting ? 'inspecting' : '',
@@ -56,9 +68,32 @@ export function App() {
       />
       {snapshot && (
         <>
-          <GameToolbar snapshot={snapshot} onCommand={handleCommand} />
-          <GameHud snapshot={snapshot} engine={engine} />
-          <TouchControls onCommand={handleCommand} />
+          {isRaceMode ? (
+            <>
+              <RaceHud
+                snapshot={snapshot}
+                onCommand={handleCommand}
+                onRegisterGauges={handleRegisterGauges}
+              />
+              {snapshot.race && snapshot.race.phase === 'finished' ? (
+                <RaceResults
+                  race={snapshot.race}
+                  conditionPercent={snapshot.damage.conditionPercent}
+                  onCommand={handleCommand}
+                />
+              ) : null}
+            </>
+          ) : (
+            <>
+              <GameToolbar snapshot={snapshot} onCommand={handleCommand} />
+              <GameHud snapshot={snapshot} engine={engine} />
+            </>
+          )}
+          <TouchControls
+            onCommand={handleCommand}
+            showBoost={isRaceMode}
+            boostStatus={snapshot.race?.boost.status ?? 'empty'}
+          />
           <StartScreen snapshot={snapshot} onCommand={handleCommand} />
         </>
       )}

@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-10-15T04:43:33.402Z",
+  "capturedAt": "2026-10-15T06:10:29.202Z",
   "audioInitFailureProbe": {
     "initResult": false,
     "ctxAfterFailure": false,
@@ -24,9 +24,9 @@
         "textures": 23
       },
       "trackedResourcesBeforeDispose": {
-        "geometries": 324,
-        "materials": 88,
-        "textures": 25,
+        "geometries": 367,
+        "materials": 113,
+        "textures": 29,
         "renderTargets": 2
       },
       "trackedResourcesAfterDispose": {
@@ -60,9 +60,9 @@
         "textures": 23
       },
       "trackedResourcesBeforeDispose": {
-        "geometries": 324,
-        "materials": 88,
-        "textures": 25,
+        "geometries": 367,
+        "materials": 113,
+        "textures": 29,
         "renderTargets": 2
       },
       "trackedResourcesAfterDispose": {
@@ -96,9 +96,9 @@
         "textures": 23
       },
       "trackedResourcesBeforeDispose": {
-        "geometries": 324,
-        "materials": 88,
-        "textures": 25,
+        "geometries": 367,
+        "materials": 113,
+        "textures": 29,
         "renderTargets": 2
       },
       "trackedResourcesAfterDispose": {
@@ -132,9 +132,9 @@
         "textures": 23
       },
       "trackedResourcesBeforeDispose": {
-        "geometries": 324,
-        "materials": 88,
-        "textures": 25,
+        "geometries": 367,
+        "materials": 113,
+        "textures": 29,
         "renderTargets": 2
       },
       "trackedResourcesAfterDispose": {
@@ -168,9 +168,9 @@
         "textures": 23
       },
       "trackedResourcesBeforeDispose": {
-        "geometries": 324,
-        "materials": 88,
-        "textures": 25,
+        "geometries": 367,
+        "materials": 113,
+        "textures": 29,
         "renderTargets": 2
       },
       "trackedResourcesAfterDispose": {

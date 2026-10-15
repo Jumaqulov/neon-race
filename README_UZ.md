@@ -17,6 +17,7 @@ D:\neon-race/
 ├── README_UZ.md          # O‘zbek tilidagi qo‘llanma
 ├── MIGRATION.md          # Arxitektura va modullar xaritasi
 ├── AUDIT_FIXES.md        # Audit topilmalari, ildiz sabablar va tuzatishlar hisoboti
+├── STAGE_3_1.md          # 3.1-etap: Neon Circuit lokal poyga arxitekturasi va hisoboti
 ├── web/                  # React + TypeScript + Vite + Three.js (r128) frontend
 │   ├── index.html
 │   ├── package.json
@@ -24,13 +25,17 @@ D:\neon-race/
 │   ├── src/
 │   │   ├── app/
 │   │   ├── components/
+│   │   │   └── race/     # RaceHud, RaceResults, ModeSelect
 │   │   ├── game/
+│   │   │   ├── race/     # trackDefinition, checkpointSystem, boostSystem, raceSession
+│   │   │   └── world/    # provingGround, neonCircuit, worldBuilder
 │   │   ├── shared/
 │   │   ├── storage/
 │   │   └── styles/
 │   └── tests/
 │       ├── physics.test.ts
 │       ├── engine.test.ts
+│       ├── race.test.ts
 │       └── e2e.test.ts
 ├── backend/              # Lokal server (kelajakda Rust + Tokio + Axum backend)
 │   ├── package.json
@@ -96,7 +101,23 @@ npm run verify
 
 ---
 
-## 4. Klaviatura, Sichqoncha, Touch va Gamepad boshqaruvi
+## 4. O‘yin rejimlari (`Poyga — Neon Circuit` va `Poligon`)
+
+Ilova ishga tushganda asosiy menyuda ikki rejimdan birini tanlash mumkin:
+
+1. **Poyga — Neon Circuit (`neon_circuit`)**:
+   - Kechki sanoat hududidagi ~760 m yopiq halqa trassa (`yo‘l kengligi = 14 m`), neon sanoat tunneli (`balandligi = 7.5 m`), start/finish arkasi, konteynerlar va omborxonalar.
+   - **Oqim**: `Ready` (`Poygani boshlash`) → `3–2–1–BOSHLANDI!` countdown → **3 aylana** × **10 ta ketma-ket checkpoint** → `RaceResults` yakuniy natijalar oynasi (`Qayta poyga` / `Menyuga qaytish`).
+   - **Boost tizimi**: Trassada 4 ta neon boost pickup pad mavjud. Pad ustidan o‘tganda 1 slotli boost zaxirasi `TAYYOR` holatiga o‘tadi. `E` (yoki mobil ekranda `BOOST`) bosilganda `2.0 s` davomida `+6.0 m/s²` qo‘shimcha tezlanish beradi (`maxBoostSpeed = 60.0 m/s`). Boost pad’lar har yangi aylanada qayta tiklanadi.
+   - **Trassaga qaytarish (`R`)**: Mashinani oxirgi o‘tilgan checkpoint’ga qaytaradi, shikastlanishni ta’mirlaydi, umumiy vaqtga **`+5.0 s` jarima** qo‘shadi va joriy boost’ni tozalaydi.
+   - **Adolatli poyga siyosati**: Poyga rejimida Poligon sinov tugmalari (`F` bepul ta’mirlash, `V` 80 km/h crash test, `Y` slow-motion, `I` inspect kamera va `N` kun/tun) bloklangan.
+
+2. **Poligon — Erkin haydash va avtomobil sinovi (`proving_ground`)**:
+   - Barcha asl V3 imkoniyatlari: konusli slalom, drift hisoblagich, `V` (`80 km/h` crash test), `F` (`Repair`), `I` (`Inspect` kamera), `Y` (`0.25×` slow-motion) va to‘liq fizika telemetriyasi.
+
+---
+
+## 5. Klaviatura, Sichqoncha, Touch va Gamepad boshqaruvi
 
 Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputController.ts` va `web/src/components/` dagi haqiqiy kodga to‘liq mos:
 
@@ -105,26 +126,27 @@ Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputControlle
   - `S` / `ArrowDown`: Tormoz / Orqaga yurish (Brake / Reverse)
   - `A` / `D` yoki `ArrowLeft` / `ArrowRight`: Rul boshqaruvi (Steer Left / Right)
   - `Space`: Qo‘l tormozi (Handbrake) — faqat fokus canvas/body’da bo‘lganda ishlaydi; fokus toolbar tugmasida bo‘lsa, tugmaning standart `Space`/`Enter` bosilishini buzmaydi.
+  - `E`: **Boost** faollashtirish *(faqat `Poyga — Neon Circuit` rejimida, boost yig‘ilganda)*
 - **Kamera va ko‘rish (5 ta kamera: `Chase`, `Far chase`, `Hood`, `Orbit`, `Inspect`)**:
-  - `C`: Kamerani navbat bilan almashtirish (`0..4`)
-  - `I`: Inspect (`cam = 4`) erkin orbita rejimiga o‘tish yoki undan chiqish (sichqoncha bilan bosib surish orqali aylantirish va g‘ildirakcha bilan `zoom` qilish, masofa `4..16` m)
+  - `C`: Kamerani navbat bilan almashtirish (`Poligon`da `0..4`, `Poyga`da `0..3` haydash kameralari)
+  - `I`: Inspect (`cam = 4`) erkin orbita rejimiga o‘tish yoki undan chiqish *(faqat `Poligon` rejimida)*
 - **Yoritish va chiroqlar**:
   - `L`: Old faralar (Headlights)
   - `O`: Yon gabarit chiroqlari (Side marker lights)
   - `Z`: Chap burilish ko‘rsatkichi (Left indicator)
   - `X`: O‘ng burilish ko‘rsatkichi (Right indicator)
   - `B`: Avariya chiroqlari (Hazards)
-  - `N`: Kun / Tun mavzusi (Day / Night)
+  - `N`: Kun / Tun mavzusi (Day / Night — *faqat `Poligon` rejimida; `Neon Circuit` kechki rejimda ishlaydi*)
 - **Shikastlanish, sinov va fizika**:
-  - `V`: Crash Test — o‘yin ichidagi haqiqiy devorga urilish sinovi (`80 km/h`, ya’ni `80 / 3.6 ≈ 22.22 m/s`, `3`-uzatma)
-  - `F`: Avtomobil kuzovi, oynalari, faralari va g‘ildiraklarini to‘liq ta’mirlash (`Repair`)
-  - `R`: Avtomobil va konuslarni boshlang‘ich holatga qaytarish (`Reset`)
+  - `V`: Crash Test — `80 km/h` devorga urilish sinovi *(faqat `Poligon` rejimida)*
+  - `F`: Avtomobil kuzovi, oynalari, faralari va g‘ildiraklarini to‘liq ta’mirlash *(faqat `Poligon` rejimida)*
+  - `R`: `Poligon`da boshlang‘ich nuqtaga qaytarish (`Reset`); `Poyga`da oxirgi checkpoint’ga qaytarish (`+5s` jarima bilan)
   - `T`: Traction Control (`TCS`) yoqish / o‘chirish
 - **Grafika, rang, ovoz va vaqt**:
-  - `P`: Kuzov bo‘yoq rangini almashtirish (8 ta rang: `Candy red`, `Grabber blue`, `Highland green`, `School-bus yellow`, `Competition orange`, `Plum crazy`, `Tuxedo black`, `Wimbledon white`)
+  - `P`: Kuzov bo‘yoq rangini almashtirish (8 ta rang)
   - `G`: Grafika sifatini almashtirish (`Auto` → `High` → `Medium` → `Low`)
   - `Q`: Dinamik soyalarni (`Shadows`) yoqish / o‘chirish
-  - `Y`: Slow-Motion (`0.25×` sekinlashtirilgan fizika vaqti)
+  - `Y`: Slow-Motion (`0.25×` sekinlashtirilgan fizika vaqti — *faqat `Poligon` rejimida*)
   - `M`: Ovozni yoqish / o‘chirish (`Mute / Unmute`)
   - `U`: Tezlik birligini almashtirish (`KM/H` ↔ `MPH`)
   - `H`: Yordam oynasini (`Help`) ochish / yopish
@@ -132,11 +154,11 @@ Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputControlle
 - **Uzatmalar qutisi (Transmission)**:
   - Avtomatik: 5 ta oldinga uzatma (`1`–`5`, nisbatlar `[2.95, 1.95, 1.42, 1.10, 0.87]`), `N` (neytral) va `R` (orqaga uzatma, `reverse: 3.1`, `final: 3.7`).
 - **Sensorli ekran va Gamepad**:
-  - Mobil / touch ekranlarda `TouchControls` paneli va standart HTML5 Gamepad API to‘liq ishlaydi.
+  - Mobil / touch ekranlarda `TouchControls` paneli (`Poyga` rejimida qo‘shimcha `BOOST` tugmasi bilan) va standart HTML5 Gamepad API to‘liq ishlaydi.
 
 ---
 
-## 5. Offline ishlash va `localStorage` kalitlari
+## 6. Offline ishlash va `localStorage` kalitlari
 
 - **100% Offline**: Barcha skriptlar, CSS va Three.js (`0.128.0`) lokal paketlangan, hech qanday tashqi CDN yoki tarmoq so‘rovlari ishlatilmaydi.
 - **Haqiqiy `localStorage` kalitlari (`web/src/storage/settingsStore.ts`)**:
