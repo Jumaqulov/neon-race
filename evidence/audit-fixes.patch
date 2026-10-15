@@ -1,0 +1,3942 @@
+﻿diff --git a/.gitignore b/.gitignore
+index a8445ce..41f4b27 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -8,6 +8,9 @@ dist/
+ web/dist/
+ backend/dist/
+ 
++# Verification evidence & artifacts
++evidence/
++
+ # Future Rust / Cargo build artifacts
+ backend/target/
+ target/
+diff --git a/AUDIT_FIXES.md b/AUDIT_FIXES.md
+new file mode 100644
+index 0000000..12487ed
+--- /dev/null
++++ b/AUDIT_FIXES.md
+@@ -0,0 +1,97 @@
++# AUDIT_FIXES.md тАФ Neon Race V3 Audit Topilmalari va Tuzatishlar Hisoboti
++
++Ushbu hujjat `D:\neon-race` monorepo loyihasida oтАШtkazilgan texnik audit topilmalari, ularning ildiz sabablari, kiritilgan minimal va xavfsiz tuzatishlar hamda tekshiruv usullarini bayon qiladi.
++
++---
++
++## 1. P1 тАФ Resurslarni ToтАШliq va Xavfsiz Tozalash (`GameEngine.dispose()`)
++
++### Muammolar va Ildiz Sabablar
++1. **Faqat `Mesh` obyektlarini yigтАШish**: `GameEngine.cleanupInternal()` sahnadagi resurslarni `isMeshObject(obj)` orqali yigтАШgan. Natijada `THREE.Points` (`Smoke`, `ExhaustSmoke`), `THREE.LineSegments` (`CrashParticles`, oyna/fara darzlari) va `THREE.Sprite` (yon gabarit chiroqlari) materiallari hamda geometriya/teksturalari toтАШliq qamrab olinmagan.
++2. **Material tekstura mapтАЩlari va `ShaderMaterial` uniform teksturalari**: Material ichidagi barcha tekstura map xususiyatlari (`map`, `roughnessMap`, `emissiveMap` va b.) hamda `ShaderMaterial.uniforms` ichidagi teksturalar (`Smoke.mat.uniforms.map.value`) tizimli ravishda treking qilinmagan.
++3. **PMREM `WebGLRenderTarget` egaligi**: `pmrem.fromScene(...)` qaytargan `WebGLRenderTarget` obyektining faqat `.texture` qismi saqlanib, render targetтАЩning oтАШzi alohida `dispose()` qilinmagan. Shuningdek, Three.js `r128` ichidagi `PMREMGenerator` `scene.background === null` boтАШlganda oтАШzining modul-ichki `backgroundBox` geometriyasini chizib, `renderer.info.memory.geometries` hisoblagichida `1` ta geometriya qoldirgan.
++4. **Three.js `r128` `Sprite` umumiy geometriyasi**: Default `new THREE.Sprite()` global umumiy `_geometry` obyektini ulashadi. Uni koтАШr-koтАШrona `dispose()` qilish boshqa `Sprite`тАЩlarga taтАЩsir qilishi, umuman tozalamaslik esa `renderer.info.memory.geometries` hisoblagichida qolib ketishiga olib kelgan.
++5. **`window.carLab` closure va global token egaligi**: `window.carLab` obyektiga egalik tokeni tekshirilmasdan yozilgan va oтАШchirilgan; eski engine `dispose()` boтАШlganda yangi engineтАЩning `window.carLab` obyektini oтАШchirib yuborishi yoki closure orqali eski engineтАЩni xotirada ushlab qolishi mumkin boтАШlgan.
++6. **Xatoga chidamlilik (`try/finally` / error-resilient cleanup) va ogтАШir havolalar**: Bitta resursning `dispose()` metodida xato chiqsa, qolgan tozalash bosqichlari toтАШxtab qolishi mumkin edi; `car`, `world`, `smoke` kabi ogтАШir maydonlar `null` qilinmagan.
++
++### Kiritilgan Tuzatishlar
++- **`web/src/game/rendering/resourceTracker.ts` (`ResourceTracker`)**:
++  - `Mesh`, `InstancedMesh`, `Points`, `Line`, `LineSegments`, `Sprite`, material massivlari, barcha standart tekstura mapтАЩlari va `ShaderMaterial.uniforms` ichidagi teksturalarni `Set` asosida yagona marta roтАШyxatga oladi va `dispose()` qiladi.
++  - Default `THREE.Sprite` umumiy geometriyasini avtomatik `markExternal()` qiladi va hech qachon buzmaydi; `GameEngine.init()` esa avtomobilning 4 ta `Sprite` chirogтАШiga engine-ga xos klonlangan geometriya (`ownsGeometry = true`) biriktiradi.
++  - `trackRenderTarget(rt)` PMREM `WebGLRenderTarget` obyektini roтАШyxatga oladi va uning ichki `.texture` obyektini ikki marta `dispose()` qilishdan himoyalaydi.
++  - Har bir resursning `dispose()` chaqiruvi `try/catch` orqali bajariladi: bitta resurs xato otsayam, qolgan barcha resurslar tozalanib boтАШlgach xato qayta koтАШtariladi.
++- **`web/src/game/GameEngine.ts`**:
++  - `init()` davomida sahnadan uziladigan konus va kuzov qismlari (`instanceCones`, `mergeRigidMeshes`, `optimizeCarMeshes`, `BreakawayParts`) oldindan va `cleanupInternal()` ichida `this.resources.captureTree(...)` orqali qamrab olinadi.
++  - `carLabToken` orqali `window.carLab` faqat joriy engineтАЩga tegishli boтАШlsagina oтАШchiriladi (`if (window.carLab === this.carLabToken) delete window.carLab`).
++  - `cleanupInternal()` barcha bosqichlarni (`RAF`, `toastTimer`, `input.detach()`, `cameraCtrl.detach()`, `audio.dispose()`, `resizeObserver.disconnect()`, DOM listenerlar, `resources.dispose()`, `scene.clear()`, `renderer.dispose()`) alohida `safeRun` bloklarida bajaradi va barcha ogтАШir havolalarni (`car`, `world`, `smoke`, `engineVapor`, `exhaust`, `skids`, `parts`, `damage`, `crashParticles`, `glassShards`, `metalShards`, `quality`, `envs`, `envTargets`) `null` qiladi.
++- **`web/src/game/audio/soundEngine.ts` va `web/src/game/camera/cameraController.ts`**:
++  - `SoundEngine.cleanupResources()` ham `dispose()` chaqiruvida, ham `init()` vaqtida yarim yoтАШlda xato chiqqanda (`catch` bloki, masalan `createWaveShaper()` yoki `createBuffer()` xatosi) yaratilgan barcha oscillator va nodeтАЩlarni alohida `try/catch` bloklarida toтАШxtatib uzadi hamda yaratilgan `AudioContext.close()` promiseтАЩini `this.closePromise` (`waitForClose()`) orqali kuzatib yopadi.
++  - `CameraController.detach()` aktiv drag va pointer capture (`releasePointerCapture`) holatini toтАШliq yakunlaydi hamda `lostpointercapture` hodisasini tinglaydi.
++
++---
++
++## 2. P1 тАФ Klaviatura, UI Fokus va Canvas Fokusini Ajratish
++
++### Muammolar va Ildiz Sabablar
++1. **Tor `isInteractiveTarget` tekshiruvi**: Oldingi `isInteractiveTarget` faqat `target.tagName === 'BUTTON'` yoki `INPUT`/`SELECT`/`TEXTAREA` ni tekshirgan. `<button>` ichidagi `<kbd>`, `<span>`, `<svg>` bosilganda yoki fokus `<button>` da turganda `Space` bosilsa, oтАШyin qoтАШl tormozini (`hb = 1`) yoqib yuborgan va `preventDefault()` tufayli tugmaning standart klaviatura faollashuvini buzgan.
++2. **Majburiy `.blur()`**: `GameToolbar.tsx` tugma bosilganda `e.currentTarget.blur()` chaqirib, klaviatura (`Tab`) foydalanuvchisining fokusini majburan yoтАШqotgan.
++3. **Yopishib qoladigan tugmalar (`Stuck keys`)**: Haydash tugmasi (`W`) bosib turilganda fokus `<button>` yoki `<input>` ga oтАШtsa (`focusin`), oynadan chiqilsa (`blur`) yoki sahifa yashirilsa (`visibilitychange`), tugma holati (`up = 1`) osilib qolgan.
++4. **Canvas fokusining yoтАШqligi**: `#gl` canvas elementida `tabIndex={0}` boтАШlmagani sababli Start (`#go`) bosilganda yoki canvasтАЩga klik qilinganda fokus canvasтАЩga oтАШtmagan.
++
++### Kiritilgan Tuzatishlar
++- **`web/src/game/input/inputController.ts`**:
++  - `isInteractiveTarget(target, activeElement)` endi `Element.closest()` va ota elementlar zanjiri orqali `button, input, textarea, select, option, dialog, a[href], summary, [role="button"], [role="link"], [role="menuitem"], [role="switch"], [role="tab"], [contenteditable=""], [contenteditable="true"]` elementlarini hamda `document.activeElement` ni tekshiradi.
++  - Fokus interaktiv UI elementda boтАШlganda `keydown`/`keyup` oтАШyin boshqaruvini (`Space`, `WASD`, hotkeyтАЩlar) ishga tushirmaydi va `preventDefault()` chaqirmaydi (`Space`/`Enter` tugmani tabiiy faollashtiradi).
++  - `window.focusin` (interaktiv elementga fokus oтАШtganda), `window.blur` va `document.visibilitychange` (`document.hidden`) hodisalarida `clearKeys()` / `clearAll()` barcha bosib turilgan tugmalarni darhol `0` ga tushiradi.
++- **`web/src/components/GameToolbar.tsx`, `StartScreen.tsx`, `TouchControls.tsx`, `GameEngine.ts`**:
++  - `GameToolbar.tsx` ichidagi majburiy `.blur()` olib tashlandi; `:focus-visible` uslubi `game.css` ga qoтАШshildi.
++  - `#gl` canvas `tabIndex = 0` oldi; `#go` (Start) tugmasi bosilganda va `#gl` canvasтАЩga `pointerdown` qilinganda `focusCanvas()` fokusni `#gl` ga oтАШtkazadi.
++  - `TouchControls.tsx` da `onPointerCancel` va `onLostPointerCapture` qoтАШshildi.
++
++---
++
++## 3. P2 тАФ Hujjatlar va Node.js Versiya Mosligi
++
++### Muammolar va Ildiz Sabablar
++- `README_UZ.md` va `MIGRATION.md` da bir nechta tugmalar (`X` vs `V`, `H` vs `B`, `P` vs `Esc`, `Z` vs `Y` `0.25├Ч`), uzatma nisbatlari (`[2.95, 1.95, 1.42, 1.10, 0.87]`), Crash Test tezligi (`80 km/h = 80 / 3.6 тЙИ 22.22 m/s`) va `localStorage` kalitlari (`musclecar.*`) koddan farq qilgan.
++- `package.json` va `package-lock.json` da `"engines"` talabi bir xil boтАШlmagan (`node --test tests/*.test.ts` Node 24 da qoтАШshimcha bayroqlarsiz bevosita ishlaydi).
++
++### Kiritilgan Tuzatishlar
++- Root `package.json`, `web/package.json`, `backend/package.json` hamda `package-lock.json` ichidagi workspace yozuvlarida `"engines": { "node": ">=24.0.0", "npm": ">=11.0.0" }` bir xil qilib belgilandi.
++- `README_UZ.md` va `MIGRATION.md` haqiqiy kod konstantalari (`gears: [2.95, 1.95, 1.42, 1.10, 0.87]`, `reverse: 3.1`, `final: 3.7`, Crash Test `80 km/h`, `5` kamera, `8` boтАШyoq rangi, barcha hotkeyтАЩlar va `7` ta `musclecar.*` `localStorage` kaliti) bilan 100% moslashtirildi.
++
++---
++
++## 4. P1/P2 тАФ Haqiqiy Xulq-atvor va Real Browser E2E Testlari
++
++- **`web/tests/engine.test.ts`** (8 ta unit test):
++  - Headless unit testlar haqiqiy vazifasiga mos nomlandi (`Headless GameEngine ...`).
++  - `ResourceTracker` (`Mesh`, `InstancedMesh`, `Points`, `LineSegments`, `Sprite`, texture maps, shader uniform textures, shared `Sprite` geometry himoyasi), PMREM `WebGLRenderTarget` (`texture` ikki marta `dispose()` boтАШlmasligi va xatoga chidamlilik), `window.carLab` token egaligi, `InputController` fokus ajratish va `SoundEngine.init()` yarim tayyorlangan audio xatosini tozalash uchun alohida unit testlar qoтАШshildi.
++- **`backend/tests/server.test.ts`** (11 ta server va offline bundle testi):
++  - Test boshlanishida (`before()`) har doim `web/dist` tozalanib, `viteBuild` orqali joriy manbadan yangidan yigтАШiladi.
++  - Faqat `index.html` emas, balki build ichidagi barcha `.html`, `.css` va `.js` fayllar oтАШqilib, tashqi `http://`, `https://`, `//`, `ws://`, `wss://` havolalar va CDN manzillar yoтАШqligi tekshiriladi.
++- **`web/tests/e2e.test.ts`** (3 ta kompleks Playwright + Chromium WebGL E2E testi):
++  - Belgilangan kadrlar sonini kutish oтАШrniga oтАШyin holati oтАШzgarishini cheklangan timeout bilan kutish (`page.waitForFunction` / `waitUntil`) qoтАШllandi (FPSтАЩga bogтАШliqlik bartaraf etildi):
++    1. **E2E 1 тАФ Offline va ToтАШliq OтАШyin Oqimi**: Tashqi tarmoq bloklangan holda sahifa yuklanishi, `#gl` WebGL draw callтАЩlar, gaz/rul/tormoz, kamera almashishi, Crash Test (`KeyV`) da haqiqiy devorga urilish (`contacts >= 1`, `displaced > 0`), Repair (`KeyF`), Pause/Resume (`Escape`) hamda desktop/mobil skrinshotlar.
++    2. **E2E 2 тАФ Fokus va Klaviatura (6 ta ssenariy)**: Toolbar `<button>` da `Space` va `Enter`, `#gl` canvasтАЩda `Space` qoтАШl tormozi, `<input>` ichida `W` yozish, `W` bosib turilganda fokus `<input>` ga oтАШtishi (`stuck key` boтАШlmasligi), `#go` Start bosilganda fokus `#gl` ga oтАШtishi.
++    3. **E2E 3 тАФ 5├Ч `<StrictMode>` Lifecycle, GPU Cleanup va Real-Browser Audio Error Probe**: Haqiqiy Chromium `AudioContext` da `createWaveShaper()` xatosi yuz berganda kontekstning `closed` holatga oтАШtishi hamda 5 marta `<StrictMode><GameViewport /></StrictMode>` mount тЖТ start тЖТ Crash Test (`contacts >= 1 && displaced > 0` tasdiqlangach) тЖТ unmount sikli; har sikl yakunida `glCanvasCount === 0`, `window.carLab === undefined`, `engine.isDisposed() === true`, `renderer.info.memory.geometries === 0`, `renderer.info.memory.textures === 0`, `activeRafs === 0` va `AudioContext.state === 'closed'`.
++
++---
++
++## 5. Qolgan Cheklovlar
++
++- Vite production build vaqtida Three.js (`r128`) kutubxonasi bitta asosiy bundle ichida yigтАШilgani sababli JS chunk hajmi `~846 kB` (`gzip ~237 kB`). Bu lokal va offline ishlash uchun maqbul boтАШlib, oтАШyin funksionalligiga taтАЩsir qilmaydi.
++- Headless Chromium muhitida WebGL SwiftShader dasturiy rasterizatori orqali tekshiriladi; haqiqiy diskret/integratsiyalashgan GPUтАЩda FPS va sifat profili (`AdaptiveQuality`) yanada yuqori ishlaydi.
++
++---
++
++## 6. Tekshirish Buyruqlari
++
++```powershell
++npm run typecheck
++npm run lint
++npm run build
++npm test
++npm run test:e2e
++npm run verify
++```
+diff --git a/MIGRATION.md b/MIGRATION.md
+index 6f455b5..bdc93a7 100644
+--- a/MIGRATION.md
++++ b/MIGRATION.md
+@@ -1,22 +1,25 @@
+ # MIGRATION.md тАФ Monorepo (`web/` + `backend/`) va React + TypeScript + Vite Arxitekturasi
+ 
+-Ushbu hujjat `D:\neon-race` loyihasining yagona Git repozitoriy (monorepo) ichida **`web/`** (React + TypeScript + Vite) va **`backend/`** (Node.js lokal server, kelajakda Rust + Tokio + Axum) tuzilmasiga oтАШtkazilganini tavsiflaydi.
++Ushbu hujjat `D:\neon-race` loyihasining yagona Git repozitoriy (monorepo) ichida **`web/`** (React + TypeScript + Vite) va **`backend/`** (Node.js lokal server, kelajakda Rust + Tokio + Axum) tuzilmasiga oтАШtkazilganini hamda audit natijasida mustahkamlangan qismlarini tavsiflaydi.
+ 
+ ---
+ 
+ ## 1. Monorepo arxitekturasi (`D:\neon-race`)
+ 
+-Repozitoriy ildizida (`D:\neon-race\package.json`) npm workspaces (`["web", "backend"]`) ishlatiladi:
++Repozitoriy ildizida (`D:\neon-race\package.json`) npm workspaces (`["web", "backend"]`) va `"engines": { "node": ">=24.0.0", "npm": ">=11.0.0" }` talabi ishlatiladi:
+ 
+ - **`web/`** (`@neon-race/web`):
+   - React 19 + TypeScript (`strict: true`) + Vite 6 + Three.js (`0.128.0`) asosidagi frontend ilova.
+-  - Fizika, 3D sahna, kuzov deformatsiyasi, zarrachalar, Web Audio sintezatori va React UI komponentlari shu yerda joylashgan.
+-  - `web/tests/` ichida fizika (`physics.test.ts`, 20 ta test) va dvigatel lifecycle (`engine.test.ts`, 4 ta test) testlari mavjud.
++  - Fizika (`120 Hz` fixed timestep), 3D sahna, kuzov deformatsiyasi, zarrachalar, Web Audio sintezatori va React UI komponentlari shu yerda joylashgan.
++  - `web/tests/` ichida:
++    - `physics.test.ts` тАФ 20 ta deterministik avtomobil fizikasi, toтАШqnashuv va deformatsiya testi;
++    - `engine.test.ts` тАФ 8 ta headless `GameEngine`, `ResourceTracker`, PMREM `WebGLRenderTarget`, `window.carLab` token egaligi, `InputController` fokus ajratish, `SoundEngine` yarim tayyorlangan audio xatosini tozalash va `localStorage` sinxronizatsiyasi testi;
++    - `e2e.test.ts` тАФ 3 ta haqiqiy Chromium (Playwright + WebGL) E2E testi (offline tarmoq izolyatsiyasi, 6 ta fokus/klaviatura ssenariysi, hamda 5 marta React `<StrictMode>` mount тЖТ run тЖТ crash тЖТ unmount va audio xato tozalash sikli).
+ - **`backend/`** (`@neon-race/backend`):
+   - `backend/src/index.mjs` тАФ `web/dist/` production build fayllarini `127.0.0.1:4173` da xavfsizlik sarlavhalari (`CSP`, `X-Content-Type-Options`, symlink va path traversal himoyasi) bilan uzatuvchi lokal server hamda `/health` endpointi.
+-  - `backend/tests/server.test.ts` тАФ 11 ta HTTP, xavfsizlik va offline bundle testi.
++  - `backend/tests/server.test.ts` тАФ 11 ta HTTP, xavfsizlik va fresh build asosidagi offline bundle (`HTML` + barcha `CSS`/`JS` assetlar) testi.
+ - **`original/`**:
+-  - `original/muscle-car-v3.html` тАФ dastlabki V3 monolit HTML fayli (zaxira va taqqoslash manbasi sifatida saqlangan).
++  - `original/muscle-car-v3.html` тАФ dastlabki V3 monolit HTML fayli (zaxira va taqqoslash manbasi sifatida oтАШzgarishsiz saqlangan).
+ 
+ ---
+ 
+@@ -24,9 +27,9 @@ Repozitoriy ildizida (`D:\neon-race\package.json`) npm workspaces (`["web", "bac
+ 
+ | Asl qism | Yangi monorepo yoтАШli | MasтАЩuliyati |
+ | :--- | :--- | :--- |
+-| Umumiy konstantalar va turlar | `web/src/shared/types.ts` | `PAINTS`, `CAMS`, `START_POSE`, `ARENA`, `GameInput`, `GameSettings`, `DamageState`, `GameSnapshot`, `GameCommand` |
+-| `localStorage` sozlamalari | `web/src/storage/settingsStore.ts` | `store`, `loadInitialSettings` (`musclecar.*` kalitlari) |
+-| Avtomobil fizikasi (120 Hz) | `web/src/game/physics/carPhysics.ts` | `CarPhysics`, `clamp`, `lerp`, `smooth` |
++| Umumiy konstantalar va turlar | `web/src/shared/types.ts` | `PAINTS` (8 ta), `CAMS` (5 ta), `START_POSE`, `ARENA`, `GameInput`, `GameSettings`, `DamageState`, `GameSnapshot`, `GameCommand` |
++| `localStorage` sozlamalari | `web/src/storage/settingsStore.ts` | `store`, `loadInitialSettings` (`musclecar.cam`, `musclecar.tcs`, `musclecar.shadowsV3`, `musclecar.sound`, `musclecar.mph`, `musclecar.paint`, `musclecar.best`) |
++| Avtomobil fizikasi (120 Hz, 5 uzatma + R) | `web/src/game/physics/carPhysics.ts` | `CarPhysics` (`gears: [2.95, 1.95, 1.42, 1.10, 0.87]`, `reverse: 3.1`, `final: 3.7`), `clamp`, `lerp`, `smooth` |
+ | ToтАШqnashuvlar va Grid | `web/src/game/physics/collisions.ts` | `ColliderGrid`, `collideCircle`, `collide` |
+ | Deformatsiya matematikasi | `web/src/game/damage/deformation.ts` | `impactWeight`, `impactDisplacement`, `makeCrushHit` |
+ | Kuzov shikastlanishi | `web/src/game/damage/vehicleDamage.ts` | `tessellateDamageGeometry`, `VehicleDamage` |
+@@ -35,12 +38,13 @@ Repozitoriy ildizida (`D:\neon-race\package.json`) npm workspaces (`["web", "bac
+ | 3D dunyo va konuslar | `web/src/game/world/worldBuilder.ts` | `buildWorld`, `resetCone`, `updateCones`, `instanceCones`, `syncConeInstances` |
+ | Zarrachalar (iz, tutun) | `web/src/game/effects/particles.ts` | `SkidMarks`, `Smoke`, `exhaustProfile`, `ExhaustSmoke` |
+ | Shader, osmon va batching | `web/src/game/rendering/batching.ts` | `THEMES`, `makeSkyMaterial`, `applySkyTheme`, `detailTexture`, `mergeRigidMeshes` |
++| GPU resurslar trekeri | `web/src/game/rendering/resourceTracker.ts` | `ResourceTracker` (`Mesh`, `InstancedMesh`, `Points`, `LineSegments`, `Sprite`, texture maps, shader uniforms, PMREM `WebGLRenderTarget`) |
+ | Adaptiv sifat | `web/src/game/rendering/adaptiveQuality.ts` | `QUALITY_PROFILES`, `AdaptiveQuality` |
+ | Spidometr va G-metr canvas | `web/src/game/rendering/gauges.ts` | `GaugeRenderer` (`#cluster` va `#gmeter`, 30 Hz) |
+-| Web Audio sintezatori | `web/src/game/audio/soundEngine.ts` | `SoundEngine` va idempotent `dispose()` |
+-| Klaviatura/sichqoncha/gamepad | `web/src/game/input/inputController.ts` | `InputController`, `isInteractiveTarget` |
+-| Kamera va Inspect orbit | `web/src/game/camera/cameraController.ts` | `CameraController`, `wrapAngle` |
+-| OтАШyin dvigateli | `web/src/game/GameEngine.ts` | `GameEngine` (`init`, `start`, `pause`, `resume`, `resize`, `dispose`, `getSnapshot`, `subscribe`, `dispatch`) |
++| Web Audio sintezatori | `web/src/game/audio/soundEngine.ts` | `SoundEngine`, `cleanupResources()` (`init()` xatosida ham `AudioContext.close()`), `waitForClose()` va idempotent `dispose()` |
++| Klaviatura/sichqoncha/gamepad | `web/src/game/input/inputController.ts` | `InputController`, `isInteractiveTarget`, `focusin`/`blur`/`visibilitychange` input reset |
++| Kamera va Inspect orbit | `web/src/game/camera/cameraController.ts` | `CameraController`, pointer capture tozalash, `wrapAngle` |
++| OтАШyin dvigateli | `web/src/game/GameEngine.ts` | `GameEngine` (`init`, `start`, `pause`, `resume`, `resize`, `dispose`, `focusCanvas`, `getSnapshot`, `subscribe`, `dispatch`) |
+ | React UI qatlami | `web/src/app/App.tsx`, `web/src/components/*` | `GameViewport`, `GameToolbar`, `GameHud`, `StartScreen`, `TouchControls` |
+ | Lokal backend server | `backend/src/index.mjs` | `createLocalServer`, `/health`, `127.0.0.1:4173` |
+ 
+diff --git a/README_UZ.md b/README_UZ.md
+index 0e1d477..a6bd938 100644
+--- a/README_UZ.md
++++ b/README_UZ.md
+@@ -12,8 +12,11 @@ D:\neon-race/
+ тФЬтФАтФА package-lock.json     # Yagona lockfile
+ тФЬтФАтФА tsconfig.json         # Umumiy TypeScript strict konfiguratsiyasi
+ тФЬтФАтФА eslint.config.mjs     # Umumiy ESLint konfiguratsiyasi
+-тФЬтФАтФА .gitignore            # Node, Vite dist va kelajakdagi Rust target/ uchun ignore qoidalari
++тФЬтФАтФА .gitignore            # Node, Vite dist, evidence/ va kelajakdagi Rust target/ uchun ignore qoidalari
+ тФЬтФАтФА START-LOCAL.cmd       # Windows'da lokal production serverni tez ishga tushirish
++тФЬтФАтФА README_UZ.md          # OтАШzbek tilidagi qoтАШllanma
++тФЬтФАтФА MIGRATION.md          # Arxitektura va modullar xaritasi
++тФЬтФАтФА AUDIT_FIXES.md        # Audit topilmalari, ildiz sabablar va tuzatishlar hisoboti
+ тФЬтФАтФА web/                  # React + TypeScript + Vite + Three.js (r128) frontend
+ тФВ   тФЬтФАтФА index.html
+ тФВ   тФЬтФАтФА package.json
+@@ -27,7 +30,8 @@ D:\neon-race/
+ тФВ   тФВ   тФФтФАтФА styles/
+ тФВ   тФФтФАтФА tests/
+ тФВ       тФЬтФАтФА physics.test.ts
+-тФВ       тФФтФАтФА engine.test.ts
++тФВ       тФЬтФАтФА engine.test.ts
++тФВ       тФФтФАтФА e2e.test.ts
+ тФЬтФАтФА backend/              # Lokal server (kelajakda Rust + Tokio + Axum backend)
+ тФВ   тФЬтФАтФА package.json
+ тФВ   тФЬтФАтФА README.md
+@@ -36,7 +40,7 @@ D:\neon-race/
+ тФВ   тФВ   тФФтФАтФА index.d.mts
+ тФВ   тФФтФАтФА tests/
+ тФВ       тФФтФАтФА server.test.ts
+-тФФтФАтФА original/             # Asl V3 HTML zaxira nusxasi
++тФФтФАтФА original/             # Asl V3 HTML zaxira nusxasi (oтАШzgartirilmagan)
+     тФФтФАтФА muscle-car-v3.html
+ ```
+ 
+@@ -45,8 +49,8 @@ D:\neon-race/
+ ## 2. Talab qilinadigan muhit
+ 
+ - **Operatsion tizim**: Windows 10/11 (PowerShell)
+-- **Node.js**: `>=22` (joriy muhitda `v24.11.1` sinovdan oтАШtgan)
+-- **npm**: `11.x` (`11.6.2`)
++- **Node.js**: `>=24.0.0` (joriy muhitda `v24.11.1` sinovdan oтАШtgan; `node --test` TypeScript test fayllarini qoтАШshimcha eksperimental bayroqlarsiz bevosita bajarishi uchun Node 24+ talab etiladi)
++- **npm**: `>=11.0.0` (`11.6.2`)
+ - **Brauzer**: WebGL va Web Audio API qoтАШllab-quvvatlovchi zamonaviy brauzer (Chrome, Edge, Firefox)
+ 
+ ---
+@@ -80,27 +84,67 @@ npm start
+ - **Manzil**: `http://127.0.0.1:4173`
+ - **Health endpoint**: `http://127.0.0.1:4173/health`
+ 
+-### Testlar, Typecheck va Lint
++### Testlar, E2E, Typecheck va Lint
+ ```powershell
+-npm test
+ npm run typecheck
+ npm run lint
++npm run build
++npm test
++npm run test:e2e
++npm run verify
+ ```
+ 
+ ---
+ 
+ ## 4. Klaviatura, Sichqoncha, Touch va Gamepad boshqaruvi
+ 
+-- **Harakat**: `W` / `тЖС` (Gaz), `S` / `тЖУ` (Tormoz / Orqaga), `A` / `D` yoki `тЖР` / `тЖТ` (Rul), `Space` (QoтАШl tormozi)
+-- **Kamera va koтАШrish**: `C` (Kamera almashtirish), `I` (Inspect orbit rejimi), sichqoncha bilan surish va gтАШildirakcha orqali yaqinlashtirish (`zoom`), ikki marta bosish (`double-click` тАФ kamerani markazlash)
+-- **Avtomobil tizimlari**: `L` (Faralar), `H` (Avariya chiroqlari), `T` (TCS), `M` (Ovoz yoqish/oтАШchirish)
+-- **Shikastlanish va sinov**: `F` (TaтАЩmirlash), `R` (Reset), `X` (Crash Test тАФ old tomonga kuchli zarba)
+-- **Vaqt va rejim**: `P` (Pauza), `Z` (Slow-Mo `0.28x`)
+-- **Sensorli ekran va Gamepad**: Touch tugmalari va standart Gamepad API toтАШliq ishlaydi.
++Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputController.ts` va `web/src/components/` dagi haqiqiy kodga toтАШliq mos:
++
++- **Harakat**:
++  - `W` / `ArrowUp`: Gaz (Throttle)
++  - `S` / `ArrowDown`: Tormoz / Orqaga yurish (Brake / Reverse)
++  - `A` / `D` yoki `ArrowLeft` / `ArrowRight`: Rul boshqaruvi (Steer Left / Right)
++  - `Space`: QoтАШl tormozi (Handbrake) тАФ faqat fokus canvas/bodyтАЩda boтАШlganda ishlaydi; fokus toolbar tugmasida boтАШlsa, tugmaning standart `Space`/`Enter` bosilishini buzmaydi.
++- **Kamera va koтАШrish (5 ta kamera: `Chase`, `Far chase`, `Hood`, `Orbit`, `Inspect`)**:
++  - `C`: Kamerani navbat bilan almashtirish (`0..4`)
++  - `I`: Inspect (`cam = 4`) erkin orbita rejimiga oтАШtish yoki undan chiqish (sichqoncha bilan bosib surish orqali aylantirish va gтАШildirakcha bilan `zoom` qilish, masofa `4..16` m)
++- **Yoritish va chiroqlar**:
++  - `L`: Old faralar (Headlights)
++  - `O`: Yon gabarit chiroqlari (Side marker lights)
++  - `Z`: Chap burilish koтАШrsatkichi (Left indicator)
++  - `X`: OтАШng burilish koтАШrsatkichi (Right indicator)
++  - `B`: Avariya chiroqlari (Hazards)
++  - `N`: Kun / Tun mavzusi (Day / Night)
++- **Shikastlanish, sinov va fizika**:
++  - `V`: Crash Test тАФ oтАШyin ichidagi haqiqiy devorga urilish sinovi (`80 km/h`, yaтАЩni `80 / 3.6 тЙИ 22.22 m/s`, `3`-uzatma)
++  - `F`: Avtomobil kuzovi, oynalari, faralari va gтАШildiraklarini toтАШliq taтАЩmirlash (`Repair`)
++  - `R`: Avtomobil va konuslarni boshlangтАШich holatga qaytarish (`Reset`)
++  - `T`: Traction Control (`TCS`) yoqish / oтАШchirish
++- **Grafika, rang, ovoz va vaqt**:
++  - `P`: Kuzov boтАШyoq rangini almashtirish (8 ta rang: `Candy red`, `Grabber blue`, `Highland green`, `School-bus yellow`, `Competition orange`, `Plum crazy`, `Tuxedo black`, `Wimbledon white`)
++  - `G`: Grafika sifatini almashtirish (`Auto` тЖТ `High` тЖТ `Medium` тЖТ `Low`)
++  - `Q`: Dinamik soyalarni (`Shadows`) yoqish / oтАШchirish
++  - `Y`: Slow-Motion (`0.25├Ч` sekinlashtirilgan fizika vaqti)
++  - `M`: Ovozni yoqish / oтАШchirish (`Mute / Unmute`)
++  - `U`: Tezlik birligini almashtirish (`KM/H` тЖФ `MPH`)
++  - `H`: Yordam oynasini (`Help`) ochish / yopish
++  - `Escape`: Pauza (`Pause` / `Resume`)
++- **Uzatmalar qutisi (Transmission)**:
++  - Avtomatik: 5 ta oldinga uzatma (`1`тАУ`5`, nisbatlar `[2.95, 1.95, 1.42, 1.10, 0.87]`), `N` (neytral) va `R` (orqaga uzatma, `reverse: 3.1`, `final: 3.7`).
++- **Sensorli ekran va Gamepad**:
++  - Mobil / touch ekranlarda `TouchControls` paneli va standart HTML5 Gamepad API toтАШliq ishlaydi.
+ 
+ ---
+ 
+-## 5. Offline ishlash va `localStorage` eslatmasi
+-
+-- **100% Offline**: Barcha skriptlar, CSS va Three.js (`0.128.0`) lokal paketlangan, tashqi CDN ishlatilmaydi.
+-- **`localStorage` kalitlari**: `musclecar.paint`, `musclecar.tod`, `musclecar.cam`, `musclecar.tcs`, `musclecar.lights`, `musclecar.hazards`, `musclecar.muted`, `musclecar.quality`, `musclecar.inspect`, `musclecar.bestDrift`.
++## 5. Offline ishlash va `localStorage` kalitlari
++
++- **100% Offline**: Barcha skriptlar, CSS va Three.js (`0.128.0`) lokal paketlangan, hech qanday tashqi CDN yoki tarmoq soтАШrovlari ishlatilmaydi.
++- **Haqiqiy `localStorage` kalitlari (`web/src/storage/settingsStore.ts`)**:
++  - `musclecar.cam` тАФ tanlangan kamera indeksi (`0..4`)
++  - `musclecar.tcs` тАФ Traction Control holati (`true` / `false`)
++  - `musclecar.shadowsV3` тАФ soyalar holati (`true` / `false`)
++  - `musclecar.sound` тАФ ovoz holati (`true` / `false`)
++  - `musclecar.mph` тАФ tezlik birligi (`true` = MPH, `false` = KM/H)
++  - `musclecar.paint` тАФ tanlangan boтАШyoq rangi (`number`, hex)
++  - `musclecar.best` тАФ eng yaxshi drift balli (`number`)
++  - *(Izoh: `night`, `lights`, `markers` va `quality` qiymatlari joriy sessiya davomida `GameSettings` ichida saqlanadi, `localStorage` ga yozilmaydi).*
+diff --git a/backend/package.json b/backend/package.json
+index 378d541..c374406 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -5,7 +5,8 @@
+   "type": "module",
+   "description": "Muscle Car Proving Ground (V3) тАФ Local Backend Server (future Rust/Axum boundary)",
+   "engines": {
+-    "node": ">=22"
++    "node": ">=24.0.0",
++    "npm": ">=11.0.0"
+   },
+   "scripts": {
+     "start": "node src/index.mjs",
+diff --git a/backend/src/index.d.mts b/backend/src/index.d.mts
+index e27ef2f..38fd37b 100644
+--- a/backend/src/index.d.mts
++++ b/backend/src/index.d.mts
+@@ -1,6 +1,6 @@
+-import type http from 'node:http';
++import type { Server } from 'node:http';
+ 
+ export const REPO_ROOT: string;
+ export const WEB_ROOT: string;
+ export const DIST: string;
+-export function createLocalServer(distDir?: string): http.Server;
++export function createLocalServer(distDir?: string): Server;
+diff --git a/backend/tests/node-env.d.ts b/backend/tests/node-env.d.ts
+index 3c1149f..1e2e81f 100644
+--- a/backend/tests/node-env.d.ts
++++ b/backend/tests/node-env.d.ts
+@@ -1,3 +1,8 @@
++declare const process: {
++  env: Record<string, string | undefined>;
++  cwd(): string;
++};
++
+ declare module 'node:test' {
+   export type TestFn = () => void | Promise<void>;
+   function test(name: string, fn: TestFn): Promise<void>;
+@@ -10,7 +15,11 @@ declare module 'node:assert/strict' {
+   function assert(value: unknown, message?: string): asserts value;
+   namespace assert {
+     function equal(actual: unknown, expected: unknown, message?: string): void;
++    function notEqual(actual: unknown, expected: unknown, message?: string): void;
++    function deepEqual(actual: unknown, expected: unknown, message?: string): void;
+     function match(value: string, regExp: RegExp, message?: string): void;
++    function throws(block: () => unknown, error?: RegExp | Error | object, message?: string): void;
++    function doesNotThrow(block: () => unknown, message?: string): void;
+   }
+   export default assert;
+ }
+@@ -19,6 +28,7 @@ declare module 'node:http' {
+   export type IncomingHttpHeaders = Record<string, string | string[] | undefined>;
+ 
+   export interface IncomingMessage {
++    url?: string;
+     statusCode?: number;
+     headers: IncomingHttpHeaders;
+     on(event: 'data', listener: (chunk: Uint8Array) => void): this;
+@@ -61,8 +71,11 @@ declare module 'node:http' {
+ declare module 'node:fs/promises' {
+   const fs: {
+     readFile(filePath: string, encoding: 'utf8'): Promise<string>;
++    writeFile(filePath: string, data: string, encoding?: 'utf8'): Promise<void>;
+     readdir(dirPath: string): Promise<string[]>;
+     access(filePath: string): Promise<void>;
++    mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<string | undefined>;
++    rm(targetPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+   };
+   export default fs;
+ }
+@@ -74,10 +87,3 @@ declare module 'node:path' {
+   };
+   export default path;
+ }
+-
+-declare module '../server/index.mjs' {
+-  import type http from 'node:http';
+-  export const ROOT: string;
+-  export const DIST: string;
+-  export function createLocalServer(distDir?: string): http.Server;
+-}
+diff --git a/backend/tests/server.test.ts b/backend/tests/server.test.ts
+index 9020c89..31551e8 100644
+--- a/backend/tests/server.test.ts
++++ b/backend/tests/server.test.ts
+@@ -10,11 +10,10 @@ const server = createLocalServer();
+ let port = 0;
+ 
+ before(async () => {
+-  try {
+-    await fs.access(path.join(DIST, 'index.html'));
+-  } catch {
+-    await viteBuild({ root: WEB_ROOT, logLevel: 'silent' });
+-  }
++  // Always build fresh from current source; never pass using a stale dist/ directory.
++  await fs.rm(DIST, { recursive: true, force: true });
++  await viteBuild({ root: WEB_ROOT, logLevel: 'silent' });
++
+   await new Promise<void>((resolve, reject) => {
+     server.once('error', reject);
+     server.listen(0, '127.0.0.1', () => resolve());
+@@ -161,21 +160,47 @@ test('CSP does not permit external scripts or evaluation', async () => {
+   assert(!csp.includes('unsafe-eval'));
+ });
+ 
+-test('Source and built dist files contain no external CDN, font or remote URL (offline readiness)', async () => {
+-  const checkFiles: string[] = [
++test('Source and built dist HTML, CSS, and JS files contain no external CDN, font or remote asset URL (offline readiness)', async () => {
++  const htmlAndCssFiles: string[] = [
+     path.join(WEB_ROOT, 'index.html'),
+     path.join(WEB_ROOT, 'src', 'styles', 'game.css'),
+     path.join(DIST, 'index.html'),
+   ];
++  const jsFiles: string[] = [];
+   const assetsDir = path.join(DIST, 'assets');
+   const assetEntries = await fs.readdir(assetsDir);
+   for (const name of assetEntries) {
+     if (name.endsWith('.css')) {
+-      checkFiles.push(path.join(assetsDir, name));
++      htmlAndCssFiles.push(path.join(assetsDir, name));
++    } else if (name.endsWith('.js')) {
++      jsFiles.push(path.join(assetsDir, name));
+     }
+   }
+-  for (const file of checkFiles) {
++  assert(jsFiles.length >= 1, 'Expected at least one built JS asset in web/dist/assets');
++
++  for (const file of htmlAndCssFiles) {
+     const text = await fs.readFile(file, 'utf8');
+     assert(!/https?:\/\/|fonts\.google|cdnjs|unpkg|jsdelivr/.test(text), `External URL found in ${file}`);
+   }
++
++  for (const file of jsFiles) {
++    const text = await fs.readFile(file, 'utf8');
++    assert(
++      !/fonts\.googleapis\.com|fonts\.gstatic\.com|cdnjs\.cloudflare\.com|unpkg\.com|cdn\.jsdelivr\.net/i.test(text),
++      `External CDN reference found in built JS ${file}`,
++    );
++    // Strip comments and harmless W3C namespace / React error-doc strings to check for remote asset URLs
++    const withoutComments = text.replace(/\/\*[\s\S]*?\*\//g, '');
++    const urls = withoutComments.match(/https?:\/\/[^\s"'`)<>]+/g) ?? [];
++    const unexpectedUrls = urls.filter(
++      (u) =>
++        !u.startsWith('http://www.w3.org/') &&
++        !u.startsWith('https://react.dev/') &&
++        !u.startsWith('https://reactjs.org/') &&
++        !u.startsWith('https://threejs.org/') &&
++        !u.startsWith('http://khronos.org/') &&
++        !u.startsWith('https://www.khronos.org/'),
++    );
++    assert.deepEqual(unexpectedUrls, [], `Unexpected external URLs in built JS ${file}: ${unexpectedUrls.join(', ')}`);
++  }
+ });
+diff --git a/package-lock.json b/package-lock.json
+index 170da19..9a7f50a 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -13,19 +13,22 @@
+       ],
+       "devDependencies": {
+         "@eslint/js": "9.24.0",
++        "@playwright/test": "1.64.1",
+         "eslint": "9.24.0",
+         "typescript": "5.8.3",
+         "typescript-eslint": "8.29.1"
+       },
+       "engines": {
+-        "node": ">=22"
++        "node": ">=24.0.0",
++        "npm": ">=11.0.0"
+       }
+     },
+     "backend": {
+       "name": "@neon-race/backend",
+       "version": "0.2.0",
+       "engines": {
+-        "node": ">=22"
++        "node": ">=24.0.0",
++        "npm": ">=11.0.0"
+       }
+     },
+     "node_modules/@babel/code-frame": {
+@@ -1103,6 +1106,22 @@
+         "node": ">= 8"
+       }
+     },
++    "node_modules/@playwright/test": {
++      "version": "1.64.1",
++      "resolved": "https://registry.npmjs.org/@playwright/test/-/test-1.64.1.tgz",
++      "integrity": "sha512-IaYGml/nSOiZWROfPtuIL7neuu9qDOZ3TNvNljUIrhDMxiGTgPjzj/g9p9RxpS2tSepPDRY+UwAaEeiKtUvIAg==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "dependencies": {
++        "playwright": "1.64.1"
++      },
++      "bin": {
++        "playwright": "cli.js"
++      },
++      "engines": {
++        "node": ">=20"
++      }
++    },
+     "node_modules/@rollup/rollup-android-arm-eabi": {
+       "version": "4.64.6",
+       "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm-eabi/-/rollup-android-arm-eabi-4.64.6.tgz",
+@@ -2855,6 +2874,35 @@
+         "url": "https://github.com/sponsors/jonschlinkert"
+       }
+     },
++    "node_modules/playwright": {
++      "version": "1.64.1",
++      "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.64.1.tgz",
++      "integrity": "sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "dependencies": {
++        "playwright-core": "1.64.1"
++      },
++      "bin": {
++        "playwright": "cli.js"
++      },
++      "engines": {
++        "node": ">=20"
++      }
++    },
++    "node_modules/playwright-core": {
++      "version": "1.64.1",
++      "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.64.1.tgz",
++      "integrity": "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "bin": {
++        "playwright-core": "cli.js"
++      },
++      "engines": {
++        "node": ">=20"
++      }
++    },
+     "node_modules/postcss": {
+       "version": "8.5.30",
+       "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.30.tgz",
+@@ -3386,7 +3434,8 @@
+         "vite": "6.2.6"
+       },
+       "engines": {
+-        "node": ">=22"
++        "node": ">=24.0.0",
++        "npm": ">=11.0.0"
+       }
+     }
+   }
+diff --git a/package.json b/package.json
+index d0e9cbb..4f81da8 100644
+--- a/package.json
++++ b/package.json
+@@ -5,7 +5,8 @@
+   "type": "module",
+   "description": "Muscle Car Proving Ground (V3) тАФ Monorepo (React + TypeScript + Vite web & backend)",
+   "engines": {
+-    "node": ">=22"
++    "node": ">=24.0.0",
++    "npm": ">=11.0.0"
+   },
+   "workspaces": [
+     "web",
+@@ -16,12 +17,15 @@
+     "build": "npm --workspace=web run build",
+     "preview": "npm --workspace=web run preview",
+     "start": "npm --workspace=backend run start",
+-    "test": "npm --workspace=web run test && npm --workspace=backend run test",
+     "typecheck": "npm --workspace=web run typecheck && npm --workspace=backend run typecheck",
+-    "lint": "eslint web/src web/tests backend/src backend/tests"
++    "lint": "eslint web/src web/tests backend/src backend/tests",
++    "test": "npm --workspace=web run test && npm --workspace=backend run test",
++    "test:e2e": "npm --workspace=web run test:e2e",
++    "verify": "npm run typecheck && npm run lint && npm run build && npm test && npm run test:e2e"
+   },
+   "devDependencies": {
+     "@eslint/js": "9.24.0",
++    "@playwright/test": "1.64.1",
+     "eslint": "9.24.0",
+     "typescript": "5.8.3",
+     "typescript-eslint": "8.29.1"
+diff --git a/web/package.json b/web/package.json
+index fd4e71a..51f6d74 100644
+--- a/web/package.json
++++ b/web/package.json
+@@ -5,13 +5,15 @@
+   "type": "module",
+   "description": "Muscle Car Proving Ground (V3) тАФ React + TypeScript + Vite Web Client",
+   "engines": {
+-    "node": ">=22"
++    "node": ">=24.0.0",
++    "npm": ">=11.0.0"
+   },
+   "scripts": {
+     "dev": "vite",
+     "build": "tsc --noEmit && vite build",
+     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+     "test": "node --test tests/physics.test.ts tests/engine.test.ts",
++    "test:e2e": "node --test tests/e2e.test.ts",
+     "typecheck": "tsc --noEmit",
+     "lint": "eslint src tests"
+   },
+diff --git a/web/src/app/App.tsx b/web/src/app/App.tsx
+index bc91148..42f918d 100644
+--- a/web/src/app/App.tsx
++++ b/web/src/app/App.tsx
+@@ -18,8 +18,12 @@ export function App() {
+     setSnapshot(instance.getSnapshot());
+   }, []);
+ 
++  const handleEngineDispose = useCallback((disposedInstance: GameEngine) => {
++    setEngine((current) => (current === disposedInstance ? null : current));
++  }, []);
++
+   useEffect(() => {
+-    if (!engine) return;
++    if (!engine || engine.isDisposed()) return;
+     setSnapshot(engine.getSnapshot());
+     const unsubscribe = engine.subscribe(() => {
+       setSnapshot(engine.getSnapshot());
+@@ -45,7 +49,11 @@ export function App() {
+ 
+   return (
+     <div className={shellClasses}>
+-      <GameViewport createEngine={createEngine} onEngineReady={handleEngineReady} />
++      <GameViewport
++        createEngine={createEngine}
++        onEngineReady={handleEngineReady}
++        onEngineDispose={handleEngineDispose}
++      />
+       {snapshot && (
+         <>
+           <GameToolbar snapshot={snapshot} onCommand={handleCommand} />
+diff --git a/web/src/components/GameToolbar.tsx b/web/src/components/GameToolbar.tsx
+index 7002dfd..602d1e6 100644
+--- a/web/src/components/GameToolbar.tsx
++++ b/web/src/components/GameToolbar.tsx
+@@ -1,4 +1,3 @@
+-import type { MouseEvent } from 'react';
+ import { PAINTS, type GameCommand, type GameSnapshot } from '../shared/types.ts';
+ 
+ export interface GameToolbarProps {
+@@ -9,16 +8,12 @@ export interface GameToolbarProps {
+ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+   const { settings, camLabel, qualityLabel, slowMotion, paused, performanceText } = snapshot;
+ 
+-  const handleHotkey = (code: string) => (e: MouseEvent<HTMLButtonElement>) => {
+-    e.preventDefault();
++  const handleHotkey = (code: string) => () => {
+     onCommand({ type: 'HOTKEY', code });
+-    e.currentTarget.blur();
+   };
+ 
+-  const handlePaint = (color: number) => (e: MouseEvent<HTMLButtonElement>) => {
+-    e.preventDefault();
++  const handlePaint = (color: number) => () => {
+     onCommand({ type: 'SET_PAINT', color });
+-    e.currentTarget.blur();
+   };
+ 
+   const sideLightsOn = settings.markers || settings.lights;
+@@ -27,33 +22,54 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+   return (
+     <div id="toolbar">
+       <div className="row panel">
+-        <button className="tb on" data-key="KeyC" onClick={handleHotkey('KeyC')}>
++        <button type="button" className="tb on" data-key="KeyC" onClick={handleHotkey('KeyC')}>
+           <kbd>C</kbd>Cam <span className="v">{camLabel}</span>
+         </button>
+-        <button className={`tb${settings.tcs ? ' on' : ''}`} data-key="KeyT" onClick={handleHotkey('KeyT')}>
++        <button
++          type="button"
++          className={`tb${settings.tcs ? ' on' : ''}`}
++          data-key="KeyT"
++          onClick={handleHotkey('KeyT')}
++        >
+           <kbd>T</kbd>TCS <span className="v">{settings.tcs ? 'On' : 'Off'}</span>
+         </button>
+-        <button className={`tb${settings.lights ? ' on' : ''}`} data-key="KeyL" onClick={handleHotkey('KeyL')}>
++        <button
++          type="button"
++          className={`tb${settings.lights ? ' on' : ''}`}
++          data-key="KeyL"
++          onClick={handleHotkey('KeyL')}
++        >
+           <kbd>L</kbd>Lights <span className="v">{settings.lights ? 'On' : 'Off'}</span>
+         </button>
+-        <button className={`tb${settings.night ? ' on' : ''}`} data-key="KeyN" onClick={handleHotkey('KeyN')}>
++        <button
++          type="button"
++          className={`tb${settings.night ? ' on' : ''}`}
++          data-key="KeyN"
++          onClick={handleHotkey('KeyN')}
++        >
+           <kbd>N</kbd>
+           <span className="v">{settings.night ? 'Night' : 'Day'}</span>
+         </button>
+-        <button className={`tb${settings.sound ? ' on' : ''}`} data-key="KeyM" onClick={handleHotkey('KeyM')}>
++        <button
++          type="button"
++          className={`tb${settings.sound ? ' on' : ''}`}
++          data-key="KeyM"
++          onClick={handleHotkey('KeyM')}
++        >
+           <kbd>M</kbd>Sound <span className="v">{settings.sound ? 'On' : 'Off'}</span>
+         </button>
+-        <button className="tb on" data-key="KeyU" onClick={handleHotkey('KeyU')}>
++        <button type="button" className="tb on" data-key="KeyU" onClick={handleHotkey('KeyU')}>
+           <kbd>U</kbd>
+           <span className="v">{settings.mph ? 'mph' : 'km/h'}</span>
+         </button>
+-        <button className="tb" data-key="KeyR" onClick={handleHotkey('KeyR')}>
++        <button type="button" className="tb" data-key="KeyR" onClick={handleHotkey('KeyR')}>
+           <kbd>R</kbd>Reset <span className="v"></span>
+         </button>
+       </div>
+ 
+       <div className="row panel detail-row" aria-label="Vehicle detail controls">
+         <button
++          type="button"
+           className={`tb${sideLightsOn ? ' on' : ''}`}
+           data-key="KeyO"
+           title="O ┬╖ Side and parking lights"
+@@ -62,6 +78,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>O</kbd>Side lights <span className="v">{sideLightsOn ? 'On' : 'Off'}</span>
+         </button>
+         <button
++          type="button"
+           className={`tb${settings.turn === 'left' ? ' on' : ''}`}
+           data-key="KeyZ"
+           title="Z ┬╖ Left indicators"
+@@ -70,6 +87,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>Z</kbd>тЧА <span className="v"></span>
+         </button>
+         <button
++          type="button"
+           className={`tb${settings.turn === 'right' ? ' on' : ''}`}
+           data-key="KeyX"
+           title="X ┬╖ Right indicators"
+@@ -78,6 +96,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>X</kbd>тЦ╢ <span className="v"></span>
+         </button>
+         <button
++          type="button"
+           className={`tb${settings.hazards ? ' on' : ''}`}
+           data-key="KeyB"
+           title="B ┬╖ Hazard lights"
+@@ -86,6 +105,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>B</kbd>Hazards <span className="v">{settings.hazards ? 'On' : 'Off'}</span>
+         </button>
+         <button
++          type="button"
+           className={`tb${isInspect ? ' on' : ''}`}
+           data-key="KeyI"
+           title="I ┬╖ Inspect the car"
+@@ -94,6 +114,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>I</kbd>KoтАШrish <span className="v">{isInspect ? 'On' : ''}</span>
+         </button>
+         <button
++          type="button"
+           className="tb"
+           data-key="KeyF"
+           title="F ┬╖ Repair without moving the car"
+@@ -105,6 +126,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+ 
+       <div className="row panel" aria-label="Crash and graphics controls">
+         <button
++          type="button"
+           className="tb"
+           data-key="KeyV"
+           title="Stage an unoccupied in-game wall crash"
+@@ -113,6 +135,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>V</kbd>Sinov <span className="v">80 km/h</span>
+         </button>
+         <button
++          type="button"
+           className={`tb${settings.shadows ? ' on' : ''}`}
+           data-key="KeyQ"
+           title="Toggle geometry shadows"
+@@ -121,6 +144,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>Q</kbd>Soya <span className="v">{settings.shadows ? 'On' : 'Off'}</span>
+         </button>
+         <button
++          type="button"
+           className="tb on"
+           data-key="KeyG"
+           title="Grafika sifatini oтАШzgartirish"
+@@ -129,6 +153,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>G</kbd>Sifat <span className="v">{qualityLabel}</span>
+         </button>
+         <button
++          type="button"
+           className={`tb${slowMotion ? ' on' : ''}`}
+           data-key="KeyY"
+           title="Harakatni 4 marta sekinlashtirish"
+@@ -137,6 +162,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+           <kbd>Y</kbd>Sekin <span className="v">{slowMotion ? '0.25├Ч' : '1├Ч'}</span>
+         </button>
+         <button
++          type="button"
+           className={`tb${paused ? ' on' : ''}`}
+           data-key="Escape"
+           title="Pauza"
+@@ -154,6 +180,7 @@ export function GameToolbar({ snapshot, onCommand }: GameToolbarProps) {
+       <div id="swatches" className="panel" aria-label="Paint colour">
+         {PAINTS.map(([hex, name]) => (
+           <button
++            type="button"
+             key={hex}
+             className={`sw${settings.paint === hex ? ' sel' : ''}`}
+             data-c={hex}
+diff --git a/web/src/components/GameViewport.tsx b/web/src/components/GameViewport.tsx
+index e30c1d9..3f9fbe2 100644
+--- a/web/src/components/GameViewport.tsx
++++ b/web/src/components/GameViewport.tsx
+@@ -3,10 +3,11 @@ import type { GameEngine } from '../game/GameEngine.ts';
+ 
+ export interface GameViewportProps {
+   onEngineReady: (engine: GameEngine) => void;
++  onEngineDispose?: (engine: GameEngine) => void;
+   createEngine: () => GameEngine;
+ }
+ 
+-export function GameViewport({ onEngineReady, createEngine }: GameViewportProps) {
++export function GameViewport({ onEngineReady, onEngineDispose, createEngine }: GameViewportProps) {
+   const containerRef = useRef<HTMLDivElement | null>(null);
+ 
+   useEffect(() => {
+@@ -17,8 +18,9 @@ export function GameViewport({ onEngineReady, createEngine }: GameViewportProps)
+ 
+     return () => {
+       engine.dispose();
++      onEngineDispose?.(engine);
+     };
+-  }, [createEngine, onEngineReady]);
++  }, [createEngine, onEngineReady, onEngineDispose]);
+ 
+   return <div id="gl-viewport" ref={containerRef} />;
+ }
+diff --git a/web/src/components/StartScreen.tsx b/web/src/components/StartScreen.tsx
+index c0e2f4e..c2788ce 100644
+--- a/web/src/components/StartScreen.tsx
++++ b/web/src/components/StartScreen.tsx
+@@ -19,20 +19,17 @@ export function StartScreen({ snapshot, onCommand }: StartScreenProps) {
+ 
+   const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+     e.preventDefault();
+-    handleStartOrReload();
++    handleAction();
+   };
+ 
+   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+     if (e.code === 'Enter' || e.code === 'Space') {
+       e.preventDefault();
+-      handleStartOrReload();
++      e.stopPropagation();
++      handleAction();
+     }
+   };
+ 
+-  const handleStartOrReload = () => {
+-    handleAction();
+-  };
+-
+   const buttonLabel = error
+     ? 'Qayta yuklash'
+     : !ready
+@@ -92,7 +89,14 @@ export function StartScreen({ snapshot, onCommand }: StartScreenProps) {
+           <span>TaтАЩmirlash</span>
+         </div>
+         <div className="touch-note">Chapdagi tugmalar тАФ rul. OтАШngda gaz va tormoz. HB тАФ qoтАШl tormozi.</div>
+-        <div id="go" role="button" tabIndex={0} onPointerDown={handlePointerDown} onKeyDown={handleKeyDown}>
++        <div
++          id="go"
++          role="button"
++          tabIndex={0}
++          onClick={handleAction}
++          onPointerDown={handlePointerDown}
++          onKeyDown={handleKeyDown}
++        >
+           {buttonLabel}
+         </div>
+         <div id="loading-status" role={error ? 'alert' : undefined}>
+diff --git a/web/src/components/TouchControls.tsx b/web/src/components/TouchControls.tsx
+index 998880e..1dd1985 100644
+--- a/web/src/components/TouchControls.tsx
++++ b/web/src/components/TouchControls.tsx
+@@ -17,12 +17,19 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
+   const [pressed, setPressed] = useState<Record<TouchControlKey, boolean>>(INITIAL_PRESSED);
+ 
+   useEffect(() => {
+-    const handleBlur = () => {
++    const handleReset = () => {
+       setPressed(INITIAL_PRESSED);
+     };
+-    window.addEventListener('blur', handleBlur);
++    const handleVisibility = () => {
++      if (document.hidden) {
++        setPressed(INITIAL_PRESSED);
++      }
++    };
++    window.addEventListener('blur', handleReset);
++    document.addEventListener('visibilitychange', handleVisibility);
+     return () => {
+-      window.removeEventListener('blur', handleBlur);
++      window.removeEventListener('blur', handleReset);
++      document.removeEventListener('visibilitychange', handleVisibility);
+     };
+   }, []);
+ 
+@@ -46,6 +53,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
+     <div id="touch">
+       <div className="tpad l">
+         <button
++          type="button"
+           className={`tbtn${pressed.left ? ' down' : ''}`}
+           data-t="left"
+           aria-label="Steer left"
+@@ -59,6 +67,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
+           </svg>
+         </button>
+         <button
++          type="button"
+           className={`tbtn${pressed.right ? ' down' : ''}`}
+           data-t="right"
+           aria-label="Steer right"
+@@ -74,6 +83,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
+       </div>
+       <div className="tpad r">
+         <button
++          type="button"
+           className={`tbtn${pressed.handbrake ? ' down' : ''}`}
+           data-t="handbrake"
+           onPointerDown={handleDown('handbrake')}
+@@ -84,6 +94,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
+           HB
+         </button>
+         <button
++          type="button"
+           className={`tbtn brk${pressed.brake ? ' down' : ''}`}
+           data-t="brake"
+           onPointerDown={handleDown('brake')}
+@@ -94,6 +105,7 @@ export function TouchControls({ onCommand }: TouchControlsProps) {
+           BRAKE
+         </button>
+         <button
++          type="button"
+           className={`tbtn gas${pressed.throttle ? ' down' : ''}`}
+           data-t="throttle"
+           onPointerDown={handleDown('throttle')}
+diff --git a/web/src/game/GameEngine.ts b/web/src/game/GameEngine.ts
+index ae680c8..1d8e29b 100644
+--- a/web/src/game/GameEngine.ts
++++ b/web/src/game/GameEngine.ts
+@@ -21,6 +21,7 @@ import { ColliderGrid, collide } from './physics/collisions.ts';
+ import { AdaptiveQuality } from './rendering/adaptiveQuality.ts';
+ import { applySkyTheme, isMeshObject, lin, makeSkyMaterial, mergeRigidMeshes, THEMES } from './rendering/batching.ts';
+ import { GaugeRenderer } from './rendering/gauges.ts';
++import { isSpriteObject, ResourceTracker } from './rendering/resourceTracker.ts';
+ import { createMuscleCar, optimizeCarMeshes, type MuscleCarModel } from './vehicle/muscleCar.ts';
+ import { buildWorld, instanceCones, resetCone, syncConeInstances, updateCones, type WorldSceneData } from './world/worldBuilder.ts';
+ 
+@@ -33,6 +34,9 @@ export interface CarLabDiagnosticAPI {
+     speed: number;
+     gear: number;
+     rpm: number;
++    thr: number;
++    brk: number;
++    hb: boolean;
+     heading: number;
+     yawRate: number;
+     engineHealth: number;
+@@ -94,6 +98,7 @@ export class GameEngine {
+   public readonly audio: SoundEngine;
+   public readonly cameraCtrl: CameraController;
+   public readonly gauges: GaugeRenderer;
++  public readonly resources: ResourceTracker;
+ 
+   private readonly headless: boolean;
+   private readonly storage: StorageAdapter | null | undefined;
+@@ -108,6 +113,7 @@ export class GameEngine {
+   private fillLight: THREE.DirectionalLight | null = null;
+   private skyMat: THREE.ShaderMaterial | null = null;
+   private sky: THREE.Mesh | null = null;
++  private envTargets: Record<'day' | 'night', THREE.WebGLRenderTarget> | null = null;
+   private envs: Record<'day' | 'night', THREE.Texture> | null = null;
+   private world: WorldSceneData | null = null;
+   private colliderGrid: ColliderGrid;
+@@ -123,6 +129,8 @@ export class GameEngine {
+   private crashParticles: CrashParticles | null = null;
+   private glassShards: LensDebris | null = null;
+   private resizeObserver: ResizeObserver | null = null;
++  private carLabToken: CarLabDiagnosticAPI | null = null;
++  private lastDisposedMemoryInfo: { geometries: number; textures: number } | null = null;
+ 
+   private ready = false;
+   private started = false;
+@@ -173,6 +181,7 @@ export class GameEngine {
+   private cachedSnapshot: GameSnapshot;
+ 
+   private readonly handleWindowResize = (): void => {
++    if (this.disposed) return;
+     if (!this.container) {
+       this.resize(window.innerWidth, window.innerHeight);
+     } else {
+@@ -182,6 +191,7 @@ export class GameEngine {
+   };
+ 
+   private readonly handleVisibilityChange = (): void => {
++    if (this.disposed) return;
+     if (typeof document !== 'undefined' && document.hidden) {
+       this.input.clearAll();
+       this.acc = 0;
+@@ -193,6 +203,7 @@ export class GameEngine {
+   };
+ 
+   private readonly handleContextLost = (e: Event): void => {
++    if (this.disposed) return;
+     e.preventDefault();
+     this.contextLost = true;
+     this.paused = true;
+@@ -200,12 +211,17 @@ export class GameEngine {
+   };
+ 
+   private readonly handleContextRestored = (): void => {
++    if (this.disposed) return;
+     this.contextLost = false;
+     if (this.renderer) this.renderer.shadowMap.needsUpdate = true;
+     this.lastTime = typeof performance !== 'undefined' ? performance.now() : 0;
+     this.toast('Grafika tiklandi ┬╖ davom etish uchun Esc');
+   };
+ 
++  private readonly handleCanvasPointerDown = (): void => {
++    this.focusCanvas();
++  };
++
+   constructor(options: GameEngineOptions = {}) {
+     this.headless = Boolean(options.headless);
+     this.storage = options.storage;
+@@ -218,6 +234,7 @@ export class GameEngine {
+     this.audio = new SoundEngine();
+     this.cameraCtrl = new CameraController();
+     this.gauges = new GaugeRenderer();
++    this.resources = new ResourceTracker();
+     this.input = new InputController({
+       isStarted: () => this.started,
+       onStart: () => this.start(),
+@@ -227,12 +244,46 @@ export class GameEngine {
+     this.cachedSnapshot = this.buildSnapshot();
+   }
+ 
++  isDisposed(): boolean {
++    return this.disposed;
++  }
++
++  isLoopActive(): boolean {
++    return !this.disposed && this.rafId !== null;
++  }
++
++  getMemoryInfo(): { geometries: number; textures: number } {
++    if (this.renderer) {
++      return {
++        geometries: this.renderer.info.memory.geometries,
++        textures: this.renderer.info.memory.textures,
++      };
++    }
++    return this.lastDisposedMemoryInfo ?? { geometries: 0, textures: 0 };
++  }
++
++  focusCanvas(): void {
++    if (this.disposed) return;
++    const target = this.renderer?.domElement ?? this.container;
++    if (target && typeof target.focus === 'function') {
++      try {
++        target.focus({ preventScroll: true });
++      } catch {
++        target.focus();
++      }
++    }
++  }
++
+   init(container: HTMLElement | null): void {
+     if (this.disposed) return;
+     this.container = container;
+     this.touchMode = detectTouchDevice();
+ 
+     if (this.headless) {
++      if (container && container.tabIndex < 0) {
++        container.tabIndex = 0;
++      }
++      this.registerGlobalDiagnostics();
+       this.ready = true;
+       this.loadingStatus = 'WASD: haydash ┬╖ V: sinov ┬╖ G: grafika ┬╖ Y: 0.25├Ч ┬╖ Esc: pauza';
+       this.input.attach();
+@@ -269,6 +320,8 @@ export class GameEngine {
+       renderer.outputEncoding = THREE.sRGBEncoding;
+       renderer.toneMapping = THREE.ACESFilmicToneMapping;
+       renderer.domElement.id = 'gl';
++      renderer.domElement.tabIndex = 0;
++      renderer.domElement.setAttribute('aria-label', 'Game canvas');
+ 
+       // Ensure no duplicate #gl canvas inside container
+       while (container.firstChild) {
+@@ -307,41 +360,62 @@ export class GameEngine {
+       scene.add(sky);
+       this.skyMat = skyMat;
+       this.sky = sky;
++      this.resources.captureTree(sky);
+ 
+       const pmrem = new THREE.PMREMGenerator(renderer);
++      const envTargets = {} as Record<'day' | 'night', THREE.WebGLRenderTarget>;
+       const envs = {} as Record<'day' | 'night', THREE.Texture>;
+-      for (const name of ['day', 'night'] as const) {
+-        const s = new THREE.Scene();
+-        const m = makeSkyMaterial();
+-        applySkyTheme(m, THEMES[name]);
+-        m.uniforms.glow.value = (m.uniforms.glow.value as number) * 0.35;
+-        for (const k of ['top', 'horizon', 'bottom'] as const) {
+-          (m.uniforms[k].value as THREE.Color).multiplyScalar(0.8);
+-        }
+-        s.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), m));
+-        const cloudMat = new THREE.MeshBasicMaterial({
+-          color: lin(name === 'day' ? 0xc8d9e3 : 0x172637),
+-          side: THREE.DoubleSide,
+-        });
+-        for (let j = 0; j < 3; j++) {
+-          const card = new THREE.Mesh(new THREE.PlaneGeometry(8, 1.0 + j * 0.3), cloudMat);
+-          card.position.set(-3 + j * 3, 4.0 + j * 0.6, 3 - j * 4);
+-          card.lookAt(0, 0, 0);
+-          s.add(card);
++      try {
++        for (const name of ['day', 'night'] as const) {
++          const s = new THREE.Scene();
++          const m = makeSkyMaterial();
++          const cloudMat = new THREE.MeshBasicMaterial({
++            color: lin(name === 'day' ? 0xc8d9e3 : 0x172637),
++            side: THREE.DoubleSide,
++          });
++          try {
++            applySkyTheme(m, THEMES[name]);
++            m.uniforms.glow.value = (m.uniforms.glow.value as number) * 0.35;
++            for (const k of ['top', 'horizon', 'bottom'] as const) {
++              (m.uniforms[k].value as THREE.Color).multiplyScalar(0.8);
++            }
++            s.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), m));
++            for (let j = 0; j < 3; j++) {
++              const card = new THREE.Mesh(new THREE.PlaneGeometry(8, 1.0 + j * 0.3), cloudMat);
++              card.position.set(-3 + j * 3, 4.0 + j * 0.6, 3 - j * 4);
++              card.lookAt(0, 0, 0);
++              s.add(card);
++            }
++            // Prevent Three.js r128 PMREMGenerator from rendering its internal module-global
++            // backgroundBox geometry when the full-sphere sky dome already encloses the scene.
++            s.background = {} as unknown as THREE.Texture;
++            const rt = pmrem.fromScene(s, 0.06);
++            s.background = null;
++            envTargets[name] = rt;
++            envs[name] = rt.texture;
++            this.resources.trackRenderTarget(rt);
++          } finally {
++            s.traverse((o) => {
++              if (isMeshObject(o) && o.geometry) o.geometry.dispose();
++            });
++            m.dispose();
++            cloudMat.dispose();
++          }
+         }
+-        envs[name] = pmrem.fromScene(s, 0.06).texture;
+-        s.traverse((o) => {
+-          if (isMeshObject(o) && o.geometry) o.geometry.dispose();
+-        });
+-        m.dispose();
+-        cloudMat.dispose();
++      } finally {
++        pmrem.dispose();
+       }
+-      pmrem.dispose();
++      this.envTargets = envTargets;
+       this.envs = envs;
+ 
+       const world = buildWorld(scene, renderer);
++      this.resources.captureTree(scene);
+       instanceCones(scene, world);
+       const worldSavedDraws = mergeRigidMeshes(scene);
++      this.resources.captureTree(scene);
++      for (const cone of world.cones) {
++        this.resources.captureTree(cone.obj);
++      }
+       this.world = world;
+       this.colliderGrid = new ColliderGrid(world.colliders.circles);
+ 
+@@ -355,6 +429,14 @@ export class GameEngine {
+       this.exhaust = new ExhaustSmoke(scene);
+ 
+       const car = createMuscleCar(this.settings.paint);
++      const carSpriteGeometry = new THREE.Sprite().geometry.clone();
++      car.group.traverse((obj) => {
++        if (isSpriteObject(obj)) {
++          obj.geometry = carSpriteGeometry;
++          obj.userData.ownsGeometry = true;
++        }
++      });
++      this.resources.captureTree(car.group);
+       scene.add(car.group);
+       quality.savedDraws = worldSavedDraws + optimizeCarMeshes(car) + (world.cones.length * 3 - 3);
+       this.car = car;
+@@ -364,6 +446,7 @@ export class GameEngine {
+       this.damage = new VehicleDamage(car);
+       this.crashParticles = new CrashParticles(scene);
+       this.glassShards = new LensDebris(scene);
++      this.resources.captureTree(scene);
+ 
+       this.phys.onImpact = (event) => this.damage?.enqueue(event);
+       this.phys.reset(...START_POSE);
+@@ -373,6 +456,7 @@ export class GameEngine {
+       this.input.attach();
+       this.cameraCtrl.attach(renderer.domElement, () => this.started && this.settings.cam === 4);
+ 
++      renderer.domElement.addEventListener('pointerdown', this.handleCanvasPointerDown);
+       renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost);
+       renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored);
+       window.addEventListener('resize', this.handleWindowResize);
+@@ -396,6 +480,11 @@ export class GameEngine {
+       this.lastTime = performance.now();
+       this.rafId = requestAnimationFrame(this.frame);
+     } catch (err) {
++      try {
++        this.cleanupInternal();
++      } catch {
++        // preserve original initialization error
++      }
+       const msg = err instanceof Error ? err.message : String(err);
+       this.fail('WebGL sahnasini yaratishda xato: ' + msg);
+     }
+@@ -410,7 +499,7 @@ export class GameEngine {
+   private registerGlobalDiagnostics(): void {
+     if (typeof window === 'undefined') return;
+     const getRenderer = (): THREE.WebGLRenderer | null => this.renderer;
+-    window.carLab = Object.freeze({
++    const api: CarLabDiagnosticAPI = Object.freeze({
+       version: 'physics-graphics-3.0',
+       snapshot: () => (this.damage ? this.damage.snapshot() : null),
+       physics: () => ({
+@@ -419,6 +508,9 @@ export class GameEngine {
+         speed: this.phys.speed * 3.6,
+         gear: this.phys.gear,
+         rpm: this.phys.rpm,
++        thr: this.phys.thr,
++        brk: this.phys.brk,
++        hb: this.phys.hb,
+         heading: this.phys.heading,
+         yawRate: this.phys.r,
+         engineHealth: this.phys.engineHealth,
+@@ -468,6 +560,8 @@ export class GameEngine {
+         };
+       },
+     });
++    this.carLabToken = api;
++    window.carLab = api;
+     window.neonLocal = Object.freeze({
+       version: '0.2.0',
+       mode: 'local-only',
+@@ -477,8 +571,11 @@ export class GameEngine {
+   }
+ 
+   setGaugeCanvases(clusterCanvas: HTMLCanvasElement | null, gMeterCanvas: HTMLCanvasElement | null): void {
++    if (this.disposed) return;
+     this.gauges.setCanvases(clusterCanvas, gMeterCanvas);
+-    this.gauges.draw(this.phys, this.settings.mph, this.touchMode);
++    if (clusterCanvas || gMeterCanvas) {
++      this.gauges.draw(this.phys, this.settings.mph, this.touchMode);
++    }
+   }
+ 
+   start(): void {
+@@ -492,6 +589,13 @@ export class GameEngine {
+         this.audio.setEnabled(false);
+       }
+     }
++    if (typeof document !== 'undefined') {
++      const active = document.activeElement as HTMLElement | null;
++      const inSplash = Boolean(active && (active.id === 'go' || active.closest?.('#splash')));
++      if (!active || active === document.body || active === document.documentElement || inSplash) {
++        this.focusCanvas();
++      }
++    }
+     this.emitSnapshot();
+   }
+ 
+@@ -563,6 +667,9 @@ export class GameEngine {
+   }
+ 
+   subscribe(listener: () => void): () => void {
++    if (this.disposed) {
++      return () => {};
++    }
+     this.listeners.add(listener);
+     return () => {
+       this.listeners.delete(listener);
+@@ -570,6 +677,7 @@ export class GameEngine {
+   }
+ 
+   private emitSnapshot(): void {
++    if (this.disposed) return;
+     this.cachedSnapshot = this.buildSnapshot();
+     for (const listener of this.listeners) {
+       listener();
+@@ -577,11 +685,13 @@ export class GameEngine {
+   }
+ 
+   private toast(msg: string): void {
++    if (this.disposed) return;
+     this.toastMessage = msg;
+     if (this.toastTimer !== null) {
+       clearTimeout(this.toastTimer);
+     }
+     this.toastTimer = setTimeout(() => {
++      if (this.disposed) return;
+       this.toastMessage = null;
+       this.toastTimer = null;
+       this.emitSnapshot();
+@@ -620,6 +730,7 @@ export class GameEngine {
+   }
+ 
+   private setPaint(hex: number): void {
++    if (this.disposed) return;
+     this.settings.paint = hex;
+     store.set('paint', hex, this.storage);
+     this.car?.setPaint(hex);
+@@ -627,6 +738,7 @@ export class GameEngine {
+   }
+ 
+   public toggleKey(code: string): void {
++    if (this.disposed) return;
+     switch (code) {
+       case 'KeyC':
+         this.settings.cam = (this.settings.cam + 1) % CAMS.length;
+@@ -741,6 +853,7 @@ export class GameEngine {
+   }
+ 
+   public repairCar(): void {
++    if (this.disposed) return;
+     this.parts?.repair();
+     this.damage?.repair();
+     this.phys.setDamage(this.damage ? this.damage.zones : { front: 0, rear: 0, left: 0, right: 0 }, this.car?.wheels);
+@@ -763,6 +876,7 @@ export class GameEngine {
+   }
+ 
+   public resetCar(): void {
++    if (this.disposed) return;
+     this.repairCar();
+     this.phys.reset(...START_POSE);
+     this.exhaust?.clear();
+@@ -780,6 +894,7 @@ export class GameEngine {
+   }
+ 
+   public launchCrashTest(): void {
++    if (this.disposed) return;
+     this.repairCar();
+     this.exhaust?.clear();
+     this.skids?.breakAll();
+@@ -857,6 +972,7 @@ export class GameEngine {
+   }
+ 
+   public advanceSimulation(input: GameInput, h: number): number {
++    if (this.disposed) return 0;
+     const count = clamp(Math.ceil(((this.phys.speed + Math.abs(this.phys.r) * 2.8) * h) / 0.14), 1, 8);
+     const sub = h / count;
+     let impact = 0;
+@@ -1083,7 +1199,16 @@ export class GameEngine {
+     if (dt > 0) this.updateEffects(dt);
+     if (this.started && !this.paused) this.updateDrift(dt);
+ 
+-    if (this.car && this.camera && this.sky && this.sun && this.renderer && this.smoke && this.exhaust && this.engineVapor) {
++    if (
++      this.car &&
++      this.camera &&
++      this.sky &&
++      this.sun &&
++      this.renderer &&
++      this.smoke &&
++      this.exhaust &&
++      this.engineVapor
++    ) {
+       this.cameraCtrl.update(
+         realDt,
+         this.started,
+@@ -1248,63 +1373,163 @@ export class GameEngine {
+     };
+   }
+ 
+-  dispose(): void {
+-    if (this.disposed) return;
+-    this.disposed = true;
++  private cleanupInternal(): void {
++    const errors: unknown[] = [];
++    const safeRun = (fn: () => void): void => {
++      try {
++        fn();
++      } catch (err) {
++        errors.push(err);
++      }
++    };
+ 
+-    if (this.rafId !== null && typeof cancelAnimationFrame === 'function') {
+-      cancelAnimationFrame(this.rafId);
+-      this.rafId = null;
+-    }
+-    if (this.toastTimer !== null) {
+-      clearTimeout(this.toastTimer);
+-      this.toastTimer = null;
+-    }
+-    this.input.detach();
+-    this.cameraCtrl.detach();
+-    this.audio.dispose();
++    safeRun(() => {
++      if (this.rafId !== null && typeof cancelAnimationFrame === 'function') {
++        cancelAnimationFrame(this.rafId);
++        this.rafId = null;
++      }
++    });
+ 
+-    if (this.resizeObserver) {
+-      this.resizeObserver.disconnect();
+-      this.resizeObserver = null;
+-    }
+-    if (typeof window !== 'undefined') {
+-      window.removeEventListener('resize', this.handleWindowResize);
+-    }
+-    if (typeof document !== 'undefined') {
+-      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+-    }
+-    if (this.renderer) {
+-      this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
+-      this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
+-    }
+-    if (this.envs) {
+-      this.envs.day.dispose();
+-      this.envs.night.dispose();
+-      this.envs = null;
+-    }
+-    if (this.scene) {
+-      const geometries = new Set<THREE.BufferGeometry>();
+-      const materials = new Set<THREE.Material>();
+-      this.scene.traverse((obj) => {
+-        if (isMeshObject(obj)) {
+-          if (obj.geometry) geometries.add(obj.geometry);
+-          if (Array.isArray(obj.material)) obj.material.forEach((m) => materials.add(m));
+-          else if (obj.material) materials.add(obj.material);
++    safeRun(() => {
++      if (this.toastTimer !== null) {
++        clearTimeout(this.toastTimer);
++        this.toastTimer = null;
++      }
++    });
++
++    safeRun(() => this.input.detach());
++    safeRun(() => this.cameraCtrl.detach());
++    safeRun(() => this.audio.dispose());
++
++    safeRun(() => {
++      if (this.resizeObserver) {
++        this.resizeObserver.disconnect();
++        this.resizeObserver = null;
++      }
++    });
++
++    safeRun(() => {
++      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
++        window.removeEventListener('resize', this.handleWindowResize);
++      }
++    });
++
++    safeRun(() => {
++      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
++        document.removeEventListener('visibilitychange', this.handleVisibilityChange);
++      }
++    });
++
++    safeRun(() => {
++      if (this.renderer) {
++        this.renderer.domElement.removeEventListener('pointerdown', this.handleCanvasPointerDown);
++        this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
++        this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
++      }
++    });
++
++    safeRun(() => {
++      if (this.envTargets) {
++        this.resources.trackRenderTarget(this.envTargets.day);
++        this.resources.trackRenderTarget(this.envTargets.night);
++      }
++      if (this.sun?.shadow?.map) {
++        this.resources.trackRenderTarget(this.sun.shadow.map as THREE.WebGLRenderTarget);
++      }
++      if (this.parts) {
++        for (const p of this.parts.parts) {
++          this.resources.captureTree(p.obj);
+         }
+-      });
+-      geometries.forEach((g) => g.dispose());
+-      materials.forEach((m) => m.dispose());
+-      this.scene.clear();
+-      this.scene = null;
+-    }
+-    if (this.renderer) {
+-      this.renderer.dispose();
+-      if (this.renderer.domElement.parentNode) {
+-        this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
+       }
+-      this.renderer = null;
+-    }
++      if (this.world) {
++        for (const c of this.world.cones) {
++          this.resources.captureTree(c.obj);
++        }
++      }
++      if (this.car) {
++        this.resources.captureTree(this.car.group);
++      }
++      if (this.scene) {
++        this.resources.captureTree(this.scene);
++        this.scene.environment = null;
++        this.scene.fog = null;
++      }
++    });
++
++    safeRun(() => {
++      this.resources.dispose();
++    });
++
++    safeRun(() => {
++      if (this.scene) {
++        this.scene.clear();
++        this.scene = null;
++      }
++    });
++
++    safeRun(() => {
++      if (this.renderer) {
++        const renderer = this.renderer;
++        this.renderer = null;
++        renderer.renderLists?.dispose?.();
++        renderer.dispose();
++        this.lastDisposedMemoryInfo = {
++          geometries: renderer.info.memory.geometries,
++          textures: renderer.info.memory.textures,
++        };
++        renderer.forceContextLoss?.();
++        if (renderer.domElement.parentNode) {
++          renderer.domElement.parentNode.removeChild(renderer.domElement);
++        }
++      }
++    });
++
++    safeRun(() => {
++      if (typeof window !== 'undefined' && this.carLabToken && window.carLab === this.carLabToken) {
++        delete window.carLab;
++      }
++      this.carLabToken = null;
++    });
++
++    this.phys.onImpact = undefined;
++    this.gauges.setCanvases(null, null);
++    this.envTargets = null;
++    this.envs = null;
++    this.world = null;
++    this.car = null;
++    this.damage = null;
++    this.parts = null;
++    this.skids = null;
++    this.smoke = null;
++    this.engineVapor = null;
++    this.exhaust = null;
++    this.crashParticles = null;
++    this.glassShards = null;
++    this.metalShards = null;
++    this.quality = null;
++    this.hemi = null;
++    this.sun = null;
++    this.fillLight = null;
++    this.sky = null;
++    this.skyMat = null;
++    this.camera = null;
++    this.container = null;
+     this.listeners.clear();
++
++    if (errors.length === 1) {
++      throw errors[0];
++    }
++    if (errors.length > 1) {
++      throw new AggregateError(errors, 'Multiple errors occurred during GameEngine.dispose()');
++    }
++  }
++
++  dispose(): void {
++    if (this.disposed) return;
++    this.disposed = true;
++    this.ready = false;
++    this.started = false;
++    this.paused = true;
++    this.cleanupInternal();
+   }
+ }
+diff --git a/web/src/game/audio/soundEngine.ts b/web/src/game/audio/soundEngine.ts
+index d07b5be..65eaa4a 100644
+--- a/web/src/game/audio/soundEngine.ts
++++ b/web/src/game/audio/soundEngine.ts
+@@ -11,6 +11,7 @@ export interface AudioUpdateInput {
+ 
+ interface OscLayer {
+   o: OscillatorNode;
++  g: GainNode;
+   mul: number;
+ }
+ 
+@@ -28,6 +29,7 @@ export class SoundEngine {
+   public ctx: AudioContext | null = null;
+   private master: GainNode | null = null;
+   private out: DynamicsCompressorNode | null = null;
++  private shaper: WaveShaperNode | null = null;
+   private lp: BiquadFilterNode | null = null;
+   private eng: GainNode | null = null;
+   private oscs: OscLayer[] = [];
+@@ -36,16 +38,35 @@ export class SoundEngine {
+   private noise: AudioBuffer | null = null;
+   private skid: NoiseLoopLayer | null = null;
+   private wind: NoiseLoopLayer | null = null;
++  private readonly oneShots = new Set<AudioScheduledSourceNode>();
++  private closePromise: Promise<void> | null = null;
+   private disposed = false;
+ 
++  isDisposed(): boolean {
++    return this.disposed;
++  }
++
++  waitForClose(): Promise<void> {
++    return this.closePromise ?? Promise.resolve();
++  }
++
+   init(soundEnabled: boolean): boolean {
+     if (this.disposed) return false;
+     if (this.ctx) {
+       if (this.ctx.state === 'suspended') {
+-        void this.ctx.resume().catch(() => {});
++        const ctxRef = this.ctx;
++        void ctxRef
++          .resume()
++          .then(() => {
++            if (this.disposed && ctxRef.state !== 'closed') {
++              void ctxRef.close().catch(() => {});
++            }
++          })
++          .catch(() => {});
+       }
+       return true;
+     }
++    if (typeof window === 'undefined') return false;
+     const win = window as WebkitWindow;
+     const AC = window.AudioContext || win.webkitAudioContext;
+     if (!AC) return false;
+@@ -63,6 +84,7 @@ export class SoundEngine {
+       const curve = new Float32Array(1024);
+       for (let i = 0; i < 1024; i++) curve[i] = Math.tanh((i / 511.5 - 1) * 2.2);
+       shaper.curve = curve;
++      this.shaper = shaper;
+ 
+       this.lp = c.createBiquadFilter();
+       this.lp.type = 'lowpass';
+@@ -75,16 +97,17 @@ export class SoundEngine {
+         ['sawtooth', 0.5, 0.5],
+         ['square', 2.01, 0.08],
+       ];
+-      this.oscs = specs.map(([type, mul, gain]) => {
++      this.oscs = [];
++      for (const [type, mul, gain] of specs) {
+         const o = c.createOscillator();
+         const g = c.createGain();
++        this.oscs.push({ o, g, mul });
+         o.type = type;
+         g.gain.value = gain;
+         o.connect(g);
+         g.connect(shaper);
+         o.start();
+-        return { o, mul };
+-      });
++      }
+ 
+       shaper.connect(this.lp);
+       this.lp.connect(this.eng);
+@@ -102,10 +125,16 @@ export class SoundEngine {
+       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+       this.noise = buf;
+ 
+-      const loop = (filterType: BiquadFilterType, freq: number, q: number): NoiseLoopLayer => {
++      const loop = (
++        filterType: BiquadFilterType,
++        freq: number,
++        q: number,
++        assign: (layer: NoiseLoopLayer) => void,
++      ): void => {
+         const s = c.createBufferSource();
+         const f = c.createBiquadFilter();
+         const g = c.createGain();
++        assign({ s, f, g });
+         s.buffer = buf;
+         s.loop = true;
+         f.type = filterType;
+@@ -116,20 +145,25 @@ export class SoundEngine {
+         f.connect(g);
+         g.connect(comp);
+         s.start(0, Math.random());
+-        return { s, f, g };
+       };
+ 
+-      this.skid = loop('bandpass', 1100, 6);
+-      this.wind = loop('lowpass', 380, 0.7);
++      loop('bandpass', 1100, 6, (layer) => {
++        this.skid = layer;
++      });
++      loop('lowpass', 380, 0.7, (layer) => {
++        this.wind = layer;
++      });
+       return true;
+     } catch {
+-      this.ctx = null;
++      this.cleanupResources();
+       return false;
+     }
+   }
+ 
+   update(p: AudioUpdateInput): void {
+-    if (!this.ctx || !this.lp || !this.eng || !this.lfo || !this.lfoG || !this.skid || !this.wind) return;
++    if (this.disposed || !this.ctx || !this.lp || !this.eng || !this.lfo || !this.lfoG || !this.skid || !this.wind) {
++      return;
++    }
+     const t = this.ctx.currentTime;
+     const f = (p.rpm / 60) * 4; // V8 firing frequency
+     for (const { o, mul } of this.oscs) o.frequency.setTargetAtTime(f * mul, t, 0.015);
+@@ -144,7 +178,7 @@ export class SoundEngine {
+   }
+ 
+   thud(j: number): void {
+-    if (!this.ctx || !this.noise || !this.out) return;
++    if (this.disposed || !this.ctx || !this.noise || !this.out) return;
+     const c = this.ctx;
+     const s = c.createBufferSource();
+     const f = c.createBiquadFilter();
+@@ -158,9 +192,11 @@ export class SoundEngine {
+     s.connect(f);
+     f.connect(g);
+     g.connect(this.out);
++    this.oneShots.add(s);
+     s.start(t, Math.random());
+     s.stop(t + 0.45);
+     s.onended = () => {
++      this.oneShots.delete(s);
+       s.disconnect();
+       f.disconnect();
+       g.disconnect();
+@@ -168,7 +204,7 @@ export class SoundEngine {
+   }
+ 
+   glass(): void {
+-    if (!this.ctx || !this.noise || !this.out) return;
++    if (this.disposed || !this.ctx || !this.noise || !this.out) return;
+     const c = this.ctx;
+     const t = c.currentTime;
+     const s = c.createBufferSource();
+@@ -182,9 +218,11 @@ export class SoundEngine {
+     s.connect(f);
+     f.connect(g);
+     g.connect(this.out);
++    this.oneShots.add(s);
+     s.start(t);
+     s.stop(t + 0.33);
+     s.onended = () => {
++      this.oneShots.delete(s);
+       s.disconnect();
+       f.disconnect();
+       g.disconnect();
+@@ -192,7 +230,7 @@ export class SoundEngine {
+   }
+ 
+   cone(sp: number): void {
+-    if (!this.ctx || !this.out) return;
++    if (this.disposed || !this.ctx || !this.out) return;
+     const c = this.ctx;
+     const o = c.createOscillator();
+     const g = c.createGain();
+@@ -204,59 +242,116 @@ export class SoundEngine {
+     g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+     o.connect(g);
+     g.connect(this.out);
++    this.oneShots.add(o);
+     o.start(t);
+     o.stop(t + 0.18);
+     o.onended = () => {
++      this.oneShots.delete(o);
+       o.disconnect();
+       g.disconnect();
+     };
+   }
+ 
+   setEnabled(on: boolean): void {
++    if (this.disposed) return;
+     if (this.ctx && this.master) {
+       this.master.gain.setTargetAtTime(on ? 0.5 : 0, this.ctx.currentTime, 0.05);
+     }
+   }
+ 
+   suspend(): void {
++    if (this.disposed) return;
+     if (this.ctx && this.ctx.state === 'running') {
+       void this.ctx.suspend().catch(() => {});
+     }
+   }
+ 
+   resume(): void {
++    if (this.disposed) return;
+     if (this.ctx && this.ctx.state === 'suspended') {
+-      void this.ctx.resume().catch(() => {});
++      const ctxRef = this.ctx;
++      void ctxRef
++        .resume()
++        .then(() => {
++          if (this.disposed && ctxRef.state !== 'closed') {
++            void ctxRef.close().catch(() => {});
++          }
++        })
++        .catch(() => {});
+     }
+   }
+ 
+-  dispose(): void {
+-    if (this.disposed) return;
+-    this.disposed = true;
+-    for (const { o } of this.oscs) {
++  private cleanupResources(): void {
++    for (const { o, g } of this.oscs) {
+       try {
+         o.stop();
++      } catch {
++        // already stopped or not started
++      }
++      try {
+         o.disconnect();
+       } catch {
+-        // already stopped
++        // ignore
++      }
++      try {
++        g.disconnect();
++      } catch {
++        // ignore
+       }
+     }
+     this.oscs = [];
++    for (const node of this.oneShots) {
++      try {
++        node.stop();
++      } catch {
++        // ignore
++      }
++      try {
++        node.disconnect();
++      } catch {
++        // ignore
++      }
++    }
++    this.oneShots.clear();
+     if (this.lfo) {
+       try {
+         this.lfo.stop();
++      } catch {
++        // ignore
++      }
++      try {
+         this.lfo.disconnect();
+       } catch {
+         // ignore
+       }
+       this.lfo = null;
+     }
++    if (this.lfoG) {
++      try {
++        this.lfoG.disconnect();
++      } catch {
++        // ignore
++      }
++      this.lfoG = null;
++    }
+     for (const layer of [this.skid, this.wind]) {
+       if (layer) {
+         try {
+           layer.s.stop();
++        } catch {
++          // ignore
++        }
++        try {
+           layer.s.disconnect();
++        } catch {
++          // ignore
++        }
++        try {
+           layer.f.disconnect();
++        } catch {
++          // ignore
++        }
++        try {
+           layer.g.disconnect();
+         } catch {
+           // ignore
+@@ -265,9 +360,36 @@ export class SoundEngine {
+     }
+     this.skid = null;
+     this.wind = null;
++    for (const node of [this.shaper, this.lp, this.eng, this.out, this.master]) {
++      if (node) {
++        try {
++          node.disconnect();
++        } catch {
++          // ignore
++        }
++      }
++    }
++    this.shaper = null;
++    this.lp = null;
++    this.eng = null;
++    this.out = null;
++    this.master = null;
++    this.noise = null;
+     if (this.ctx) {
+-      void this.ctx.close().catch(() => {});
++      const c = this.ctx;
+       this.ctx = null;
++      if (c.state !== 'closed' && typeof c.close === 'function') {
++        const nextClose = Promise.resolve()
++          .then(() => c.close())
++          .catch(() => {});
++        this.closePromise = this.closePromise ? this.closePromise.then(() => nextClose) : nextClose;
++      }
+     }
+   }
++
++  dispose(): void {
++    if (this.disposed) return;
++    this.disposed = true;
++    this.cleanupResources();
++  }
+ }
+diff --git a/web/src/game/camera/cameraController.ts b/web/src/game/camera/cameraController.ts
+index cf8341c..3bfd074 100644
+--- a/web/src/game/camera/cameraController.ts
++++ b/web/src/game/camera/cameraController.ts
+@@ -73,6 +73,13 @@ export class CameraController {
+ 
+   detach(): void {
+     if (!this.domElement) return;
++    if (this.inspectDrag && typeof this.domElement.releasePointerCapture === 'function') {
++      try {
++        this.domElement.releasePointerCapture(this.inspectDrag.id);
++      } catch {
++        // ignore if pointer capture is already released
++      }
++    }
+     this.domElement.removeEventListener('pointerdown', this.onPointerDown);
+     this.domElement.removeEventListener('pointermove', this.onPointerMove);
+     this.domElement.removeEventListener('pointerup', this.onPointerEnd);
+diff --git a/web/src/game/input/inputController.ts b/web/src/game/input/inputController.ts
+index ac6944b..67ed85c 100644
+--- a/web/src/game/input/inputController.ts
++++ b/web/src/game/input/inputController.ts
+@@ -3,17 +3,111 @@
+ // ---------------------------------------------------------------
+ import type { GameInput, TouchControlKey } from '../../shared/types.ts';
+ 
++const INTERACTIVE_TAGS = new Set([
++  'BUTTON',
++  'INPUT',
++  'TEXTAREA',
++  'SELECT',
++  'DIALOG',
++  'SUMMARY',
++  'OPTION',
++  'OPTGROUP',
++  'A',
++]);
++
++const INTERACTIVE_ROLES = new Set([
++  'button',
++  'link',
++  'checkbox',
++  'switch',
++  'radio',
++  'menuitem',
++  'tab',
++  'textbox',
++  'combobox',
++  'listbox',
++  'slider',
++  'spinbutton',
++  'dialog',
++  'alertdialog',
++]);
++
++const INTERACTIVE_SELECTOR = [
++  'button',
++  'input',
++  'textarea',
++  'select',
++  'dialog',
++  'summary',
++  'a[href]',
++  '[contenteditable="true"]',
++  '[contenteditable=""]',
++  '[role="button"]',
++  '[role="link"]',
++  '[role="checkbox"]',
++  '[role="switch"]',
++  '[role="radio"]',
++  '[role="menuitem"]',
++  '[role="tab"]',
++  '[role="textbox"]',
++  '[role="combobox"]',
++  '[role="listbox"]',
++  '[role="slider"]',
++  '[role="spinbutton"]',
++  '[role="dialog"]',
++  '[role="alertdialog"]',
++].join(', ');
++
++interface ElementLike {
++  tagName?: string;
++  isContentEditable?: boolean;
++  contentEditable?: string;
++  role?: string;
++  getAttribute?: (name: string) => string | null;
++  closest?: (selector: string) => Element | null;
++  parentElement?: ElementLike | null;
++  parentNode?: ElementLike | null;
++}
++
++function isSingleNodeInteractive(node: ElementLike): boolean {
++  if (node.isContentEditable === true) return true;
++  if (node.contentEditable === 'true' || node.contentEditable === '') return true;
++  if (typeof node.getAttribute === 'function') {
++    const ce = node.getAttribute('contenteditable');
++    if (ce === 'true' || ce === '') return true;
++    const roleAttr = node.getAttribute('role')?.toLowerCase();
++    if (roleAttr && INTERACTIVE_ROLES.has(roleAttr)) return true;
++  }
++  if (typeof node.role === 'string' && INTERACTIVE_ROLES.has(node.role.toLowerCase())) {
++    return true;
++  }
++  if (typeof node.tagName === 'string' && node.tagName.length > 0) {
++    const tag = node.tagName.toUpperCase();
++    if (tag === 'A') {
++      if (typeof node.getAttribute === 'function') {
++        return node.getAttribute('href') !== null;
++      }
++      return true;
++    }
++    if (INTERACTIVE_TAGS.has(tag)) return true;
++  }
++  return false;
++}
++
+ export function isInteractiveTarget(target: EventTarget | null): boolean {
+   if (!target || typeof target !== 'object') return false;
+-  const el = target as HTMLElement;
+-  if (!el.tagName) return false;
+-  const tag = el.tagName.toUpperCase();
+-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'DIALOG') {
+-    return true;
++  let current: ElementLike | null = target as ElementLike;
++
++  if (typeof current.closest === 'function') {
++    const matched = current.closest(INTERACTIVE_SELECTOR);
++    if (matched) return true;
+   }
+-  if (el.isContentEditable) return true;
+-  if (typeof el.closest === 'function' && el.closest('input, textarea, select, dialog, [role="dialog"]')) {
+-    return true;
++
++  let depth = 0;
++  while (current && depth < 32) {
++    if (isSingleNodeInteractive(current)) return true;
++    current = current.parentElement ?? current.parentNode ?? null;
++    depth++;
+   }
+   return false;
+ }
+@@ -25,6 +119,8 @@ export interface InputCallbacks {
+   onInputReset?: () => void;
+ }
+ 
++const TOUCH_KEYS: readonly TouchControlKey[] = ['throttle', 'brake', 'left', 'right', 'handbrake'];
++
+ export class InputController {
+   public readonly keys: Record<string, boolean> = {};
+   public readonly touch: Record<TouchControlKey, number> = {
+@@ -39,7 +135,11 @@ export class InputController {
+   private readonly callbacks: InputCallbacks;
+ 
+   private readonly handleKeyDown = (e: KeyboardEvent): void => {
+-    if (isInteractiveTarget(e.target)) return;
++    if (e.code === 'Tab') return;
++    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
++    if (isInteractiveTarget(e.target) || isInteractiveTarget(activeEl)) {
++      return;
++    }
+     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+       e.preventDefault();
+     }
+@@ -56,10 +156,35 @@ export class InputController {
+     this.keys[e.code] = false;
+   };
+ 
++  private readonly handleFocusIn = (e: FocusEvent): void => {
++    if (isInteractiveTarget(e.target)) {
++      this.clearKeys();
++    }
++  };
++
+   private readonly handleBlur = (): void => {
+     this.clearAll();
+   };
+ 
++  private readonly handleVisibilityChange = (): void => {
++    if (typeof document !== 'undefined' && document.hidden) {
++      this.clearAll();
++    }
++  };
++
++  private readonly handlePointerCancel = (): void => {
++    this.clearTouch();
++  };
++
++  private readonly handleLostPointerCapture = (e: PointerEvent): void => {
++    const target = e.target as HTMLElement | null;
++    const attr = target?.getAttribute?.('data-t') as TouchControlKey | null | undefined;
++    if (attr && TOUCH_KEYS.includes(attr)) {
++      this.touch[attr] = 0;
++      this.callbacks.onInputReset?.();
++    }
++  };
++
+   constructor(callbacks: InputCallbacks) {
+     this.callbacks = callbacks;
+   }
+@@ -70,6 +195,12 @@ export class InputController {
+     window.addEventListener('keydown', this.handleKeyDown);
+     window.addEventListener('keyup', this.handleKeyUp);
+     window.addEventListener('blur', this.handleBlur);
++    window.addEventListener('pointercancel', this.handlePointerCancel);
++    window.addEventListener('lostpointercapture', this.handleLostPointerCapture);
++    if (typeof document !== 'undefined') {
++      document.addEventListener('focusin', this.handleFocusIn);
++      document.addEventListener('visibilitychange', this.handleVisibilityChange);
++    }
+   }
+ 
+   detach(): void {
+@@ -78,9 +209,41 @@ export class InputController {
+     window.removeEventListener('keydown', this.handleKeyDown);
+     window.removeEventListener('keyup', this.handleKeyUp);
+     window.removeEventListener('blur', this.handleBlur);
++    window.removeEventListener('pointercancel', this.handlePointerCancel);
++    window.removeEventListener('lostpointercapture', this.handleLostPointerCapture);
++    if (typeof document !== 'undefined') {
++      document.removeEventListener('focusin', this.handleFocusIn);
++      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
++    }
+     this.clearAll();
+   }
+ 
++  clearKeys(): void {
++    let changed = false;
++    for (const k of Object.keys(this.keys)) {
++      if (this.keys[k]) {
++        this.keys[k] = false;
++        changed = true;
++      }
++    }
++    if (changed) {
++      this.callbacks.onInputReset?.();
++    }
++  }
++
++  clearTouch(): void {
++    let changed = false;
++    for (const key of TOUCH_KEYS) {
++      if (this.touch[key] !== 0) {
++        this.touch[key] = 0;
++        changed = true;
++      }
++    }
++    if (changed) {
++      this.callbacks.onInputReset?.();
++    }
++  }
++
+   clearAll(): void {
+     for (const k of Object.keys(this.keys)) {
+       this.keys[k] = false;
+diff --git a/web/src/game/rendering/resourceTracker.ts b/web/src/game/rendering/resourceTracker.ts
+new file mode 100644
+index 0000000..cc96ea6
+--- /dev/null
++++ b/web/src/game/rendering/resourceTracker.ts
+@@ -0,0 +1,244 @@
++import type * as THREE from 'three';
++
++export interface DisposableResource {
++  dispose: () => void;
++}
++
++export interface DisposableRenderTarget extends DisposableResource {
++  texture?: THREE.Texture | THREE.Texture[];
++}
++
++export interface ResourceTrackerCounts {
++  geometries: number;
++  materials: number;
++  textures: number;
++  renderTargets: number;
++}
++
++const MATERIAL_TEXTURE_KEYS = [
++  'map',
++  'alphaMap',
++  'aoMap',
++  'bumpMap',
++  'clearcoatMap',
++  'clearcoatNormalMap',
++  'clearcoatRoughnessMap',
++  'displacementMap',
++  'emissiveMap',
++  'envMap',
++  'gradientMap',
++  'lightMap',
++  'metalnessMap',
++  'normalMap',
++  'roughnessMap',
++  'specularMap',
++  'transmissionMap',
++] as const;
++
++export function isDisposable(value: unknown): value is DisposableResource {
++  return Boolean(value && typeof value === 'object' && typeof (value as DisposableResource).dispose === 'function');
++}
++
++export function isTextureObject(value: unknown): value is THREE.Texture {
++  return Boolean(value && typeof value === 'object' && (value as THREE.Texture).isTexture && isDisposable(value));
++}
++
++export function isRenderTargetObject(value: unknown): value is THREE.WebGLRenderTarget {
++  return Boolean(
++    value &&
++      typeof value === 'object' &&
++      ((value as THREE.WebGLRenderTarget).isWebGLRenderTarget ||
++        ('texture' in (value as object) && isDisposable(value) && !isTextureObject(value))),
++  );
++}
++
++export function isSpriteObject(obj: THREE.Object3D): obj is THREE.Sprite {
++  return Boolean((obj as THREE.Sprite).isSprite || obj.type === 'Sprite');
++}
++
++/**
++ * Tracks GPU-backed Three.js resources (BufferGeometry, Material, Texture, WebGLRenderTarget)
++ * owned by a single GameEngine instance so they are disposed exactly once even if detached
++ * from the scene during mesh batching, cone instancing, damage tessellation, or breakaway parts.
++ */
++export class ResourceTracker {
++  private readonly geometries = new Set<DisposableResource>();
++  private readonly materials = new Set<DisposableResource>();
++  private readonly textures = new Set<DisposableResource>();
++  private readonly renderTargets = new Set<DisposableRenderTarget>();
++  private readonly externalResources = new WeakSet<object>();
++  private readonly renderTargetTextures = new WeakSet<object>();
++
++  /**
++   * Marks a resource (or all resources on a shared Object3D/Material) as owned externally
++   * so this tracker will never dispose it.
++   */
++  markExternal(resource: unknown): void {
++    if (!resource || typeof resource !== 'object') return;
++    this.externalResources.add(resource);
++    this.geometries.delete(resource as DisposableResource);
++    this.materials.delete(resource as DisposableResource);
++    this.textures.delete(resource as DisposableResource);
++    this.renderTargets.delete(resource as DisposableRenderTarget);
++  }
++
++  trackGeometry(geometry: unknown): void {
++    if (!isDisposable(geometry) || this.externalResources.has(geometry)) return;
++    this.geometries.add(geometry);
++  }
++
++  trackTexture(texture: unknown): void {
++    if (!isTextureObject(texture)) return;
++    if (this.externalResources.has(texture) || this.renderTargetTextures.has(texture)) return;
++    this.textures.add(texture);
++  }
++
++  trackRenderTarget(target: unknown): void {
++    if (!isRenderTargetObject(target) || this.externalResources.has(target)) return;
++    this.renderTargets.add(target);
++    const tex = target.texture;
++    if (Array.isArray(tex)) {
++      for (const item of tex) {
++        if (item && typeof item === 'object') {
++          this.renderTargetTextures.add(item);
++          this.textures.delete(item);
++        }
++      }
++    } else if (tex && typeof tex === 'object') {
++      this.renderTargetTextures.add(tex);
++      this.textures.delete(tex);
++    }
++  }
++
++  trackMaterial(material: unknown): void {
++    if (!material) return;
++    if (Array.isArray(material)) {
++      for (const item of material) this.trackMaterial(item);
++      return;
++    }
++    if (!isDisposable(material) || this.externalResources.has(material)) return;
++    this.materials.add(material);
++    this.collectMaterialTextures(material as THREE.Material);
++  }
++
++  private collectMaterialTextures(material: THREE.Material): void {
++    const rec = material as unknown as Record<string, unknown>;
++    for (const key of MATERIAL_TEXTURE_KEYS) {
++      const candidate = rec[key];
++      if (isTextureObject(candidate)) {
++        this.trackTexture(candidate);
++      }
++    }
++    for (const value of Object.values(rec)) {
++      if (isTextureObject(value)) {
++        this.trackTexture(value);
++      }
++    }
++    const uniforms = (material as THREE.ShaderMaterial).uniforms;
++    if (uniforms && typeof uniforms === 'object') {
++      for (const uniform of Object.values(uniforms)) {
++        if (!uniform || typeof uniform !== 'object') continue;
++        const val = (uniform as { value?: unknown }).value;
++        if (isTextureObject(val)) {
++          this.trackTexture(val);
++        } else if (Array.isArray(val)) {
++          for (const item of val) {
++            if (isTextureObject(item)) this.trackTexture(item);
++          }
++        }
++      }
++    }
++  }
++
++  /**
++   * Traverses an Object3D hierarchy and registers geometries, materials, textures,
++   * shader uniform textures, and light shadow render targets.
++   * Note: Three.js r128 THREE.Sprite shares a module-singleton BufferGeometry across all
++   * Sprite instances; its geometry is automatically marked external and never disposed.
++   */
++  captureTree(root: THREE.Object3D | null | undefined): void {
++    if (!root) return;
++    const visit = (obj: THREE.Object3D): void => {
++      if (isSpriteObject(obj)) {
++        if (obj.geometry) {
++          if (obj.userData?.ownsGeometry) {
++            this.trackGeometry(obj.geometry);
++          } else {
++            this.markExternal(obj.geometry);
++          }
++        }
++        this.trackMaterial(obj.material);
++      } else {
++        const withGeo = obj as THREE.Object3D & { geometry?: unknown; material?: unknown; isInstancedMesh?: boolean };
++        if (withGeo.geometry) {
++          this.trackGeometry(withGeo.geometry);
++        }
++        if (withGeo.material) {
++          this.trackMaterial(withGeo.material);
++        }
++        if (withGeo.isInstancedMesh && isDisposable(obj)) {
++          this.geometries.add(obj);
++        }
++      }
++
++      const light = obj as THREE.Light & { shadow?: { map?: THREE.WebGLRenderTarget | null } };
++      if (light.shadow?.map) {
++        this.trackRenderTarget(light.shadow.map);
++      }
++    };
++
++    if (typeof root.traverse === 'function') {
++      root.traverse(visit);
++    } else {
++      visit(root);
++    }
++  }
++
++  counts(): ResourceTrackerCounts {
++    return {
++      geometries: this.geometries.size,
++      materials: this.materials.size,
++      textures: this.textures.size,
++      renderTargets: this.renderTargets.size,
++    };
++  }
++
++  /**
++   * Disposes all tracked resources once. Idempotent on repeated calls.
++   * If any resource's dispose() throws, remaining resources still get disposed
++   * before the error is rethrown.
++   */
++  dispose(): void {
++    // Re-scan tracked materials in case texture maps or uniforms were assigned after creation.
++    for (const mat of this.materials) {
++      this.collectMaterialTextures(mat as THREE.Material);
++    }
++
++    const errors: unknown[] = [];
++    const drain = <T extends DisposableResource>(set: Set<T>, skip?: (item: T) => boolean): void => {
++      const items = Array.from(set);
++      set.clear();
++      for (const item of items) {
++        if (this.externalResources.has(item)) continue;
++        if (skip && skip(item)) continue;
++        try {
++          item.dispose();
++        } catch (err) {
++          errors.push(err);
++        }
++      }
++    };
++
++    drain(this.geometries);
++    drain(this.materials);
++    drain(this.textures, (tex) => this.renderTargetTextures.has(tex));
++    drain(this.renderTargets);
++
++    if (errors.length === 1) {
++      throw errors[0];
++    }
++    if (errors.length > 1) {
++      throw new AggregateError(errors, 'Multiple errors occurred while disposing tracked GPU resources');
++    }
++  }
++}
+diff --git a/web/src/styles/game.css b/web/src/styles/game.css
+index 3d05739..4ca3854 100644
+--- a/web/src/styles/game.css
++++ b/web/src/styles/game.css
+@@ -6,8 +6,8 @@
+ * { box-sizing: border-box; }
+ html, body, #root { margin: 0; height: 100%; overflow: hidden; background: #0d0f12; color: var(--text);
+   font-family: var(--font); -webkit-user-select: none; user-select: none; touch-action: none; }
+-#gl-viewport { position: fixed; inset: 0; overflow: hidden; }
+-#gl { display: block; position: fixed; inset: 0; }
++#gl-viewport { position: fixed; inset: 0; overflow: hidden; outline: none; }
++#gl { display: block; position: fixed; inset: 0; outline: none; }
+ .panel { background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
+   backdrop-filter: blur(10px) saturate(1.2); -webkit-backdrop-filter: blur(10px) saturate(1.2);
+   box-shadow: 0 10px 30px rgba(0, 0, 0, .25); }
+diff --git a/web/tests/e2e.test.ts b/web/tests/e2e.test.ts
+new file mode 100644
+index 0000000..3a75361
+--- /dev/null
++++ b/web/tests/e2e.test.ts
+@@ -0,0 +1,900 @@
++import test, { before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import type { Server } from 'node:http';
++import { chromium, type Browser, type Page } from '@playwright/test';
++import { build as viteBuild, createServer as createViteServer, type ViteDevServer } from 'vite';
++import { createLocalServer, DIST, REPO_ROOT, WEB_ROOT } from '../../backend/src/index.mjs';
++
++const EVIDENCE_DIR = path.join(REPO_ROOT, 'evidence');
++
++async function waitFrames(page: Page, count: number): Promise<void> {
++  await page.evaluate(
++    (n) =>
++      new Promise<void>((resolve) => {
++        let i = 0;
++        const step = () => {
++          if (++i >= n) resolve();
++          else requestAnimationFrame(step);
++        };
++        requestAnimationFrame(step);
++      }),
++    count,
++  );
++}
++
++async function resolveChromiumExecutable(): Promise<string | undefined> {
++  const localAppData = process.env.LOCALAPPDATA || '';
++  const candidates = [
++    path.join(localAppData, 'ms-playwright', 'chromium-1234', 'chrome-win64', 'chrome.exe'),
++    'C:/Program Files/Google/Chrome/Application/chrome.exe',
++    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
++    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
++  ];
++  for (const candidate of candidates) {
++    try {
++      await fs.access(candidate);
++      return candidate;
++    } catch {
++      // try next
++    }
++  }
++  return undefined;
++}
++
++let prodServer: Server;
++let prodPort = 0;
++let prodBaseUrl = '';
++let viteServer: ViteDevServer;
++let viteBaseUrl = '';
++let browser: Browser;
++
++before(async () => {
++  await fs.mkdir(EVIDENCE_DIR, { recursive: true });
++
++  // 1. Always build fresh production bundle from current source
++  await fs.rm(DIST, { recursive: true, force: true });
++  await viteBuild({ root: WEB_ROOT, logLevel: 'silent' });
++  // viteBuild sets process.env.NODE_ENV = 'production'; restore 'development' so StrictMode double-invokes effects
++  process.env.NODE_ENV = 'development';
++
++  // 2. Start production static server on an ephemeral loopback port
++  prodServer = createLocalServer(DIST);
++  await new Promise<void>((resolve, reject) => {
++    prodServer.once('error', reject);
++    prodServer.listen(0, '127.0.0.1', () => resolve());
++  });
++  const addr = prodServer.address();
++  if (!addr || typeof addr !== 'object') {
++    throw new Error('Failed to bind production test server');
++  }
++  prodPort = addr.port;
++  prodBaseUrl = `http://127.0.0.1:${prodPort}`;
++
++  // 3. Start Vite dev server on an ephemeral loopback port for direct StrictMode lifecycle mounting
++  viteServer = await createViteServer({
++    root: WEB_ROOT,
++    mode: 'development',
++    logLevel: 'silent',
++    optimizeDeps: {
++      force: true,
++    },
++    server: {
++      host: '127.0.0.1',
++      port: 0,
++      strictPort: false,
++    },
++    plugins: [
++      {
++        name: 'e2e-lifecycle-bridge',
++        transform(_code, id) {
++          if (id.replace(/\\/g, '/').endsWith('/src/main.tsx')) {
++            return `
++import { StrictMode, createElement } from 'react';
++import { createRoot } from 'react-dom/client';
++import { App } from './app/App.tsx';
++import { GameViewport } from './components/GameViewport.tsx';
++import { GameEngine } from './game/GameEngine.ts';
++import { SoundEngine } from './game/audio/soundEngine.ts';
++import './styles/game.css';
++
++const rootEl = document.getElementById('root');
++if (!rootEl) {
++  throw new Error('Root element #root topilmadi.');
++}
++
++const initialRoot = createRoot(rootEl);
++initialRoot.render(
++  createElement(StrictMode, null, createElement(App))
++);
++
++window.__e2eBridge = {
++  unmountInitialRoot: () => initialRoot.unmount(),
++  StrictMode,
++  createElement,
++  createRoot,
++  GameViewport,
++  GameEngine,
++  SoundEngine,
++};
++`;
++          }
++          return null;
++        },
++      },
++    ],
++  });
++  await viteServer.listen();
++  const viteAddr = viteServer.httpServer?.address();
++  if (!viteAddr || typeof viteAddr !== 'object') {
++    throw new Error('Failed to bind Vite test server');
++  }
++  viteBaseUrl = `http://127.0.0.1:${viteAddr.port}`;
++
++  // 4. Launch real Chromium browser with WebGL enabled
++  const executablePath = await resolveChromiumExecutable();
++  browser = await chromium.launch({
++    headless: true,
++    executablePath,
++    args: ['--use-angle=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'],
++  });
++});
++
++after(async () => {
++  if (browser) {
++    await browser.close();
++  }
++  if (viteServer) {
++    await viteServer.close();
++  }
++  if (prodServer) {
++    await new Promise<void>((resolve) => {
++      prodServer.close(() => resolve());
++      prodServer.closeAllConnections();
++    });
++  }
++});
++
++test('E2E 1: Fresh production build runs offline with zero external network requests, zero console errors, and complete gameplay flow (Start -> Drive -> Steer -> Brake -> Camera -> Crash -> Repair -> Pause/Resume)', async () => {
++  const context = await browser.newContext({
++    viewport: { width: 1280, height: 720 },
++    deviceScaleFactor: 1,
++    serviceWorkers: 'block',
++  });
++
++  const externalRequests: string[] = [];
++  const allowedOrigin = new URL(prodBaseUrl).origin;
++
++  await context.route('**/*', async (route) => {
++    const reqUrl = route.request().url();
++    if (reqUrl.startsWith('data:') || reqUrl.startsWith('blob:')) {
++      await route.continue();
++      return;
++    }
++    const parsed = new URL(reqUrl);
++    if (parsed.origin !== allowedOrigin) {
++      externalRequests.push(reqUrl);
++      await route.abort('blockedbyclient');
++      return;
++    }
++    await route.continue();
++  });
++
++  const page = await context.newPage();
++  try {
++    const consoleErrors: string[] = [];
++    const pageErrors: string[] = [];
++    const failedRequests: string[] = [];
++
++    page.on('console', (msg) => {
++      if (msg.type() === 'error') {
++        consoleErrors.push(msg.text());
++      }
++    });
++    page.on('pageerror', (err) => {
++      pageErrors.push(err.message);
++    });
++    page.on('requestfailed', (req) => {
++      failedRequests.push(`${req.method()} ${req.url()} (${req.failure()?.errorText || 'failed'})`);
++    });
++
++    await page.goto(prodBaseUrl, { waitUntil: 'networkidle' });
++    assert.equal(await page.title(), 'Neon Race ┬╖ V3 Local');
++    await page.waitForSelector('#gl');
++    await page.waitForFunction(
++      () => Boolean(window.carLab && window.carLab.rendererInfo.calls > 0 && window.carLab.rendererInfo.triangles > 0),
++      undefined,
++      { timeout: 5000 },
++    );
++
++    // Verify WebGL canvas is non-blank and rendering
++    const initialRender = await page.evaluate(() => {
++      const glCanvas = document.getElementById('gl') as HTMLCanvasElement | null;
++      return {
++        hasCanvas: Boolean(glCanvas && glCanvas.width > 0 && glCanvas.height > 0),
++        width: glCanvas?.width ?? 0,
++        height: glCanvas?.height ?? 0,
++        calls: window.carLab?.rendererInfo.calls ?? 0,
++        triangles: window.carLab?.rendererInfo.triangles ?? 0,
++      };
++    });
++    assert.equal(initialRender.hasCanvas, true);
++    assert(initialRender.calls > 0 && initialRender.triangles > 0, 'WebGL renderer must draw non-empty scene');
++
++    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'after-start-desktop.png') });
++
++    // 1. Start the game by clicking #go and wait until splash hides and #gl receives focus
++    await page.locator('#go').click();
++    await page.waitForFunction(
++      () =>
++        Boolean(
++          document.getElementById('splash')?.classList.contains('hide') &&
++            document.activeElement?.id === 'gl',
++        ),
++      undefined,
++      { timeout: 5000 },
++    );
++    const splashHidden = await page.locator('#splash').evaluate((el) => el.classList.contains('hide'));
++    assert.equal(splashHidden, true, 'Splash overlay must hide after clicking Start');
++
++    // Capture deterministic driving baseline screenshot right after reset
++    await page.keyboard.press('KeyR');
++    await page.waitForFunction(
++      () => {
++        const phys = window.carLab?.physics();
++        return Boolean(phys && Math.abs(phys.speed) < 0.05 && Math.abs(phys.x - -172) < 0.1);
++      },
++      undefined,
++      { timeout: 3000 },
++    );
++    await waitFrames(page, 1);
++    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'after-driving-desktop.png') });
++
++    // 2. Throttle (KeyW) + Steer (KeyA) + Brake (KeyS) using state-based waits
++    const pose0 = await page.evaluate(() => window.carLab!.physics());
++    await page.keyboard.down('KeyW');
++    await page.waitForFunction(
++      (startX: number) => {
++        const p = window.carLab?.physics();
++        return Boolean(p && p.speed > 5 && p.x > startX + 0.5);
++      },
++      pose0.x,
++      { timeout: 5000 },
++    );
++    await page.keyboard.down('KeyA');
++    await page.waitForFunction(
++      (startHeading: number) => {
++        const p = window.carLab?.physics();
++        return Boolean(p && Math.abs(p.heading - startHeading) > 0.02);
++      },
++      pose0.heading,
++      { timeout: 5000 },
++    );
++    await page.keyboard.up('KeyA');
++    await page.keyboard.up('KeyW');
++    const poseDriven = await page.evaluate(() => window.carLab!.physics());
++    assert(
++      poseDriven.speed > 4,
++      `Expected car to accelerate above 4 km/h, got ${poseDriven.speed.toFixed(2)} km/h`,
++    );
++    assert(poseDriven.x > pose0.x + 0.25, `Expected forward X displacement (got ${poseDriven.x - pose0.x})`);
++    assert(Math.abs(poseDriven.heading - pose0.heading) > 0.01, 'Expected steering to change heading');
++
++    // Brake with KeyS and wait until speed measurably drops
++    await page.keyboard.down('KeyS');
++    await page.waitForFunction(
++      (prevSpeed: number) => {
++        const p = window.carLab?.physics();
++        return Boolean(p && p.speed < prevSpeed - 1.0);
++      },
++      poseDriven.speed,
++      { timeout: 5000 },
++    );
++    await page.keyboard.up('KeyS');
++    const poseBraked = await page.evaluate(() => window.carLab!.physics());
++    assert(poseBraked.speed < poseDriven.speed, 'Expected braking to reduce vehicle speed');
++
++    // 3. Camera cycling (KeyC)
++    const camBefore = await page.locator('button.tb[data-key="KeyC"] .v').textContent();
++    await page.keyboard.press('KeyC');
++    await page.waitForFunction(
++      (prevCam: string | null) =>
++        document.querySelector('button.tb[data-key="KeyC"] .v')?.textContent !== prevCam,
++      camBefore,
++      { timeout: 3000 },
++    );
++    const camAfter = await page.locator('button.tb[data-key="KeyC"] .v').textContent();
++    assert.notEqual(camAfter, camBefore, 'Expected KeyC to change active camera');
++
++    // 4. In-game Crash Test (KeyV) -> wait for actual wall contact and mesh deformation
++    await page.keyboard.press('KeyV');
++    await page.waitForFunction(
++      () => {
++        const snap = window.carLab?.snapshot();
++        const cond = document.getElementById('condition')?.textContent;
++        return Boolean(snap && snap.contacts >= 1 && snap.displaced > 0 && cond && cond !== '100%');
++      },
++      undefined,
++      { timeout: 6000 },
++    );
++    await waitFrames(page, 1);
++    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'after-crash-desktop.png') });
++
++    const damageAfterCrash = await page.evaluate(() => ({
++      snap: window.carLab!.snapshot(),
++      conditionText: document.getElementById('condition')?.textContent,
++    }));
++    assert(damageAfterCrash.snap && damageAfterCrash.snap.contacts >= 1, 'Crash test must record wall contact');
++    assert(damageAfterCrash.snap.displaced > 0, 'Crash test must deform body vertices');
++    assert.notEqual(damageAfterCrash.conditionText, '100%', 'Condition percentage must drop after wall crash');
++
++    // 5. Repair (KeyF) -> wait for full restoration state
++    await page.keyboard.press('KeyF');
++    await page.waitForFunction(
++      () => {
++        const snap = window.carLab?.snapshot();
++        const cond = document.getElementById('condition')?.textContent;
++        const lamps = document.getElementById('headlamp-count')?.textContent;
++        return Boolean(snap && snap.displaced === 0 && cond === '100%' && lamps === '4 / 4');
++      },
++      undefined,
++      { timeout: 3000 },
++    );
++    const damageAfterRepair = await page.evaluate(() => ({
++      snap: window.carLab!.snapshot(),
++      conditionText: document.getElementById('condition')?.textContent,
++      headlampsText: document.getElementById('headlamp-count')?.textContent,
++    }));
++    assert.equal(damageAfterRepair.snap?.displaced, 0, 'Repair must restore all displaced vertices');
++    assert.equal(damageAfterRepair.conditionText, '100%');
++    assert.equal(damageAfterRepair.headlampsText, '4 / 4');
++
++    // 6. Pause and Resume (Escape)
++    await page.keyboard.press('Escape');
++    await page.waitForFunction(
++      () => Boolean(document.getElementById('pauseflag')?.classList.contains('show')),
++      undefined,
++      { timeout: 3000 },
++    );
++    const isPaused = await page.locator('#pauseflag').evaluate((el) => el.classList.contains('show'));
++    assert.equal(isPaused, true, 'Escape must pause the game and show pause banner');
++
++    await page.keyboard.press('Escape');
++    await page.waitForFunction(
++      () => !document.getElementById('pauseflag')?.classList.contains('show'),
++      undefined,
++      { timeout: 3000 },
++    );
++    const isResumed = await page.locator('#pauseflag').evaluate((el) => !el.classList.contains('show'));
++    assert.equal(isResumed, true, 'Second Escape must resume the game');
++
++    // 7. Mobile viewport verification (390x844)
++    await page.setViewportSize({ width: 390, height: 844 });
++    await page.waitForFunction(
++      () => {
++        const gl = document.getElementById('gl') as HTMLCanvasElement | null;
++        return Boolean(gl && gl.clientWidth === 390 && gl.clientHeight === 844);
++      },
++      undefined,
++      { timeout: 3000 },
++    );
++    await waitFrames(page, 1);
++    const mobileViewportState = await page.evaluate(() => {
++      const gl = document.getElementById('gl') as HTMLCanvasElement | null;
++      return {
++        canvasWidth: gl?.clientWidth ?? 0,
++        canvasHeight: gl?.clientHeight ?? 0,
++        toolbarVisible: Boolean(document.getElementById('toolbar')),
++      };
++    });
++    assert.equal(mobileViewportState.canvasWidth, 390);
++    assert.equal(mobileViewportState.canvasHeight, 844);
++    await page.screenshot({ path: path.join(EVIDENCE_DIR, 'after-mobile.png') });
++
++    assert.deepEqual(externalRequests, [], 'Zero external network requests allowed');
++    assert.deepEqual(failedRequests, [], 'Zero failed network requests allowed');
++    assert.deepEqual(pageErrors, [], 'Zero uncaught page errors allowed');
++    assert.deepEqual(consoleErrors, [], 'Zero console errors allowed');
++  } finally {
++    await context.close();
++  }
++});
++
++test('E2E 2: Keyboard and UI focus separation in real browser (all 6 required focus & input scenarios)', async () => {
++  const context = await browser.newContext({
++    viewport: { width: 1280, height: 720 },
++  });
++  try {
++    const page = await context.newPage();
++    await page.goto(prodBaseUrl, { waitUntil: 'networkidle' });
++    await page.waitForSelector('#gl');
++
++    // Scenario 6: Clicking Start (#go) starts game and returns focus to #gl canvas for driving
++    await page.locator('#go').click();
++    await page.waitForFunction(() => document.activeElement?.id === 'gl', undefined, { timeout: 3000 });
++    const activeAfterStart = await page.evaluate(() => document.activeElement?.id);
++    assert.equal(activeAfterStart, 'gl', 'Focus must move to #gl canvas after clicking Start');
++
++    // Scenario 1: Focused toolbar button + Space -> exactly 1 click, handbrake stays false
++    const tcsBtn = page.locator('button.tb[data-key="KeyT"]');
++    await page.evaluate(() => {
++      const btn = document.querySelector('button.tb[data-key="KeyT"]');
++      (window as unknown as { __tcsClicks: number }).__tcsClicks = 0;
++      btn?.addEventListener('click', () => {
++        (window as unknown as { __tcsClicks: number }).__tcsClicks++;
++      });
++    });
++
++    await tcsBtn.focus();
++    const tcsInitial = await tcsBtn.locator('.v').textContent();
++    await page.keyboard.down('Space');
++    await waitFrames(page, 2);
++    const buttonSpaceState = await page.evaluate(() => ({
++      activeKey: document.activeElement?.getAttribute('data-key'),
++      hb: window.carLab!.physics().hb,
++    }));
++    assert.equal(buttonSpaceState.activeKey, 'KeyT');
++    assert.equal(buttonSpaceState.hb, false, 'Focused toolbar button + Space must NOT engage handbrake');
++    await page.keyboard.up('Space');
++    await page.waitForFunction(
++      () => (window as unknown as { __tcsClicks: number }).__tcsClicks === 1,
++      undefined,
++      { timeout: 3000 },
++    );
++
++    const scenario1Result = await page.evaluate(() => ({
++      clicks: (window as unknown as { __tcsClicks: number }).__tcsClicks,
++      tcsVal: document.querySelector('button.tb[data-key="KeyT"] .v')?.textContent,
++      activeKey: document.activeElement?.getAttribute('data-key'),
++      hbDuringSpace: false,
++    }));
++    assert.equal(scenario1Result.clicks, 1, 'Focused toolbar button + Space must fire click once');
++    assert.notEqual(scenario1Result.tcsVal, tcsInitial, 'Focused toolbar button + Space must toggle TCS');
++    assert.equal(scenario1Result.activeKey, 'KeyT', 'Button must retain focus for keyboard navigation');
++
++    // Scenario 2: Same focused toolbar button + Enter -> 1 activation
++    await page.keyboard.press('Enter');
++    await page.waitForFunction(
++      () => (window as unknown as { __tcsClicks: number }).__tcsClicks === 2,
++      undefined,
++      { timeout: 3000 },
++    );
++    const scenario2Result = await page.evaluate(() => ({
++      clicks: (window as unknown as { __tcsClicks: number }).__tcsClicks,
++      tcsVal: document.querySelector('button.tb[data-key="KeyT"] .v')?.textContent,
++    }));
++    assert.equal(scenario2Result.clicks, 2, 'Same focused toolbar button + Enter must activate once');
++    assert.equal(scenario2Result.tcsVal, tcsInitial, 'Second activation must toggle TCS back');
++
++    // Scenario 3: Game canvas (#gl) focused + Space -> handbrake engages on keydown and clears on keyup
++    await page.locator('#gl').click({ position: { x: 640, y: 360 } });
++    await page.waitForFunction(() => document.activeElement?.id === 'gl', undefined, { timeout: 3000 });
++    assert.equal(await page.evaluate(() => document.activeElement?.id), 'gl');
++
++    await page.keyboard.down('Space');
++    await page.waitForFunction(() => window.carLab?.physics().hb === true, undefined, { timeout: 3000 });
++    const hbWhileHeldOnCanvas = await page.evaluate(() => window.carLab!.physics().hb);
++    assert.equal(hbWhileHeldOnCanvas, true, 'Space on focused #gl canvas must engage handbrake (hb === true)');
++    await page.keyboard.up('Space');
++    await page.waitForFunction(() => window.carLab?.physics().hb === false, undefined, { timeout: 3000 });
++    const hbAfterReleaseOnCanvas = await page.evaluate(() => window.carLab!.physics().hb);
++    assert.equal(hbAfterReleaseOnCanvas, false, 'Releasing Space on #gl canvas must clear handbrake (hb === false)');
++    const speedBeforeHb = hbWhileHeldOnCanvas;
++    const speedDuringHb = hbAfterReleaseOnCanvas;
++
++    // Reset car to standstill for Scenarios 4 and 5
++    await page.keyboard.press('KeyR');
++    await page.waitForFunction(() => Math.abs(window.carLab?.physics().speed ?? 1) < 0.05, undefined, { timeout: 3000 });
++
++    // Scenario 4: Typing 'w' into an <input> enters text and does NOT engage throttle
++    await page.evaluate(() => {
++      const inp = document.createElement('input');
++      inp.id = 'test-search-input';
++      inp.type = 'text';
++      document.body.appendChild(inp);
++      inp.focus();
++    });
++    await page.keyboard.press('KeyW');
++    await waitFrames(page, 2);
++    const scenario4Result = await page.evaluate(() => {
++      const inp = document.getElementById('test-search-input') as HTMLInputElement;
++      return {
++        value: inp.value,
++        speed: window.carLab!.physics().speed,
++        rpm: window.carLab!.physics().rpm,
++      };
++    });
++    assert.equal(scenario4Result.value.toLowerCase(), 'w', 'Typing W in input must insert character');
++    assert(scenario4Result.speed < 0.05, 'Typing W in input must NOT accelerate the car');
++
++    // Scenario 5: Holding W on canvas, shifting focus to <input>, then keyup -> throttle does not stay stuck
++    await page.locator('#gl').focus();
++    await page.keyboard.down('KeyW');
++    await page.waitForFunction(() => (window.carLab?.physics().rpm ?? 0) > 1500, undefined, { timeout: 5000 });
++    const rpmWhileHeld = await page.evaluate(() => window.carLab!.physics().rpm);
++    assert(rpmWhileHeld > 1100, 'Holding W on canvas must raise engine RPM');
++
++    // Shift focus to input while W is still held, then release W
++    await page.evaluate(() => {
++      const inp = document.getElementById('test-search-input') as HTMLInputElement;
++      inp.focus();
++    });
++    await page.keyboard.up('KeyW');
++    await page.waitForFunction(
++      (peakRpm: number) => (window.carLab?.physics().rpm ?? peakRpm) < peakRpm - 300,
++      rpmWhileHeld,
++      { timeout: 5000 },
++    );
++    const rpmAfterFocusShiftRelease = await page.evaluate(() => window.carLab!.physics().rpm);
++    assert(
++      rpmAfterFocusShiftRelease < rpmWhileHeld,
++      `Throttle must not stay stuck after focus change + keyup (RPM=${rpmAfterFocusShiftRelease} vs ${rpmWhileHeld})`,
++    );
++
++    const inputResultsReport = {
++      capturedAt: new Date().toISOString(),
++      scenario1_focusedButtonSpace: scenario1Result,
++      scenario2_focusedButtonEnter: scenario2Result,
++      scenario3_canvasSpaceHandbrake: { speedBeforeHb, speedDuringHb },
++      scenario4_inputTypingW: scenario4Result,
++      scenario5_focusShiftWhileHoldingW: { rpmWhileHeld, rpmAfterFocusShiftRelease },
++      scenario6_startFocusesCanvas: { activeAfterStart },
++    };
++    await fs.writeFile(
++      path.join(EVIDENCE_DIR, 'input-browser-results.json'),
++      JSON.stringify(inputResultsReport, null, 2),
++      'utf8',
++    );
++  } finally {
++    await context.close();
++  }
++});
++
++test('E2E 3: Real React StrictMode + WebGL GameViewport 5x mount -> run -> crash -> unmount lifecycle and audio init error cleanup probe', async () => {
++  const context = await browser.newContext({
++    viewport: { width: 1280, height: 720 },
++  });
++  try {
++    const page = await context.newPage();
++    await page.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
++
++    const consoleErrors: string[] = [];
++    const pageErrors: string[] = [];
++    page.on('console', (msg) => {
++      if (msg.type() === 'error') {
++        consoleErrors.push(msg.text());
++      }
++    });
++    page.on('pageerror', (err) => {
++      pageErrors.push(err.message);
++    });
++
++    // Instrument RAF and AudioContext at page init to verify zero leaked loops or unclosed AudioContexts
++    await page.addInitScript(() => {
++      const activeRafs = new Set<number>();
++      const origRaf = window.requestAnimationFrame.bind(window);
++      const origCaf = window.cancelAnimationFrame.bind(window);
++
++      window.requestAnimationFrame = (cb: FrameRequestCallback): number => {
++        const id = origRaf((time) => {
++          activeRafs.delete(id);
++          cb(time);
++        });
++        activeRafs.add(id);
++        return id;
++      };
++      window.cancelAnimationFrame = (id: number): void => {
++        activeRafs.delete(id);
++        origCaf(id);
++      };
++
++      const audioContexts: AudioContext[] = [];
++      let closeCallsCount = 0;
++      const OrigAC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
++      if (OrigAC) {
++        const origClose = OrigAC.prototype.close;
++        OrigAC.prototype.close = function (this: AudioContext) {
++          closeCallsCount++;
++          return origClose.call(this);
++        };
++        const WrappedAC = function (this: unknown, options?: AudioContextOptions) {
++          const instance = new OrigAC(options);
++          audioContexts.push(instance);
++          return instance;
++        } as unknown as typeof AudioContext;
++        WrappedAC.prototype = OrigAC.prototype;
++        window.AudioContext = WrappedAC;
++      }
++
++      (window as unknown as { __lifecycleProbe: unknown }).__lifecycleProbe = {
++        getActiveRafCount: () => activeRafs.size,
++        getAudioStates: () => audioContexts.map((c) => c.state),
++        getCloseCallsCount: () => closeCallsCount,
++      };
++    });
++
++    await page.goto(viteBaseUrl, { waitUntil: 'networkidle' });
++    await page.waitForSelector('#gl');
++
++    // Execute 5 full StrictMode mount -> start (WebGL + Audio) -> crash wall impact -> unmount cycles
++    const probeReport = await page.evaluate(async () => {
++      interface BridgeSoundEngine {
++        ctx: AudioContext | null;
++        init(soundEnabled: boolean): boolean;
++        waitForClose(): Promise<void>;
++        dispose(): void;
++        isDisposed(): boolean;
++      }
++
++      interface BridgeEngine {
++        start(): void;
++        toggleKey(code: string): void;
++        isDisposed(): boolean;
++        isLoopActive(): boolean;
++        getMemoryInfo(): { geometries: number; textures: number };
++        resources: {
++          counts(): { geometries: number; materials: number; textures: number; renderTargets: number };
++        };
++        audio: BridgeSoundEngine;
++      }
++
++      const bridge = (window as unknown as {
++        __e2eBridge: {
++          unmountInitialRoot: () => void;
++          StrictMode: unknown;
++          createElement: (...args: unknown[]) => unknown;
++          createRoot: (el: HTMLElement) => { render: (node: unknown) => void; unmount: () => void };
++          GameViewport: unknown;
++          GameEngine: new () => BridgeEngine;
++          SoundEngine: new () => BridgeSoundEngine;
++        };
++      }).__e2eBridge;
++
++      // Unmount initial root cleanly so we control the 5 StrictMode cycles deterministically
++      bridge.unmountInitialRoot();
++      const rootEl = document.getElementById('root')!;
++      rootEl.innerHTML = '';
++      await new Promise((r) => setTimeout(r, 80));
++
++      const probe = (window as unknown as {
++        __lifecycleProbe: {
++          getActiveRafCount: () => number;
++          getAudioStates: () => string[];
++          getCloseCallsCount: () => number;
++        };
++      }).__lifecycleProbe;
++
++      // 1. Verify real-browser SoundEngine partial init failure closes AudioContext immediately
++      const closeCallsBeforeFailureTest = probe.getCloseCallsCount();
++      const origCreateWaveShaper = AudioContext.prototype.createWaveShaper;
++      AudioContext.prototype.createWaveShaper = function () {
++        throw new Error('Injected real-browser createWaveShaper failure');
++      };
++      let audioInitFailureProbe: {
++        initResult: boolean;
++        ctxAfterFailure: boolean;
++        closeCallsDelta: number;
++        statesAfterWaitForClose: string[];
++        disposed: boolean;
++      };
++      try {
++        const failedSound = new bridge.SoundEngine();
++        const initResult = failedSound.init(true);
++        const ctxAfterFailure = failedSound.ctx !== null;
++        await failedSound.waitForClose();
++        failedSound.dispose();
++        await failedSound.waitForClose();
++        audioInitFailureProbe = {
++          initResult,
++          ctxAfterFailure,
++          closeCallsDelta: probe.getCloseCallsCount() - closeCallsBeforeFailureTest,
++          statesAfterWaitForClose: probe.getAudioStates(),
++          disposed: failedSound.isDisposed(),
++        };
++      } finally {
++        AudioContext.prototype.createWaveShaper = origCreateWaveShaper;
++      }
++
++      const waitUntil = async (predicate: () => boolean, label: string, timeoutMs = 15000): Promise<void> => {
++        const deadline = performance.now() + timeoutMs;
++        while (performance.now() < deadline) {
++          if (predicate()) return;
++          await new Promise<void>((r) => setTimeout(r, 25));
++        }
++        throw new Error(`Timed out after ${timeoutMs}ms waiting for condition: ${label}`);
++      };
++
++      const cycles: Array<{
++        cycle: number;
++        totalCreatedDuringStrictModeMount: number;
++        activeDuringRun: number;
++        glCanvasCountDuringRun: number;
++        crashContactsBeforeDispose: number;
++        crashDisplacedBeforeDispose: number;
++        rendererInfoBeforeDispose: { calls: number; triangles: number; geometries: number; textures: number };
++        trackedResourcesBeforeDispose: { geometries: number; materials: number; textures: number; renderTargets: number };
++        trackedResourcesAfterDispose: { geometries: number; materials: number; textures: number; renderTargets: number };
++        rendererMemoryAfterDispose: { geometries: number; textures: number };
++        engineIsDisposed: boolean;
++        activeAfterUnmount: number;
++        activeRafsAfterUnmount: number;
++        glCanvasCountAfterUnmount: number;
++        carLabAfterUnmount: boolean;
++        audioClosedAfterUnmount: boolean;
++      }> = [];
++
++      for (let i = 1; i <= 5; i++) {
++        const host = document.createElement('div');
++        rootEl.appendChild(host);
++
++        const createdEngines: BridgeEngine[] = [];
++        let currentReadyEngine: BridgeEngine | null = null;
++
++        const root = bridge.createRoot(host);
++        root.render(
++          bridge.createElement(
++            bridge.StrictMode,
++            null,
++            bridge.createElement(bridge.GameViewport, {
++              createEngine: () => {
++                const eng = new bridge.GameEngine();
++                createdEngines.push(eng);
++                return eng;
++              },
++              onEngineReady: (eng: BridgeEngine) => {
++                currentReadyEngine = eng;
++              },
++            }),
++          ),
++        );
++
++        // Wait until StrictMode mount->unmount->remount settles and active engine renders
++        await waitUntil(
++          () =>
++            Boolean(
++              currentReadyEngine &&
++                !currentReadyEngine.isDisposed() &&
++                currentReadyEngine.isLoopActive() &&
++                window.carLab &&
++                window.carLab.rendererInfo.calls > 0,
++            ),
++          `cycle ${i} StrictMode mount and initial WebGL render`,
++          15000,
++        );
++
++        const activeEnginesDuringRun = createdEngines.filter((e) => !e.isDisposed() && e.isLoopActive());
++        const glCanvasCountDuringRun = host.querySelectorAll('canvas#gl').length;
++
++        // Start the active engine (including Web Audio), trigger 80 km/h crash test (KeyV),
++        // and wait until actual wall contact and mesh deformation occur before unmount!
++        const readyEngine = currentReadyEngine as BridgeEngine | null;
++        if (!readyEngine) {
++          throw new Error(`Cycle ${i}: GameEngine did not become ready`);
++        }
++        readyEngine.start();
++        readyEngine.toggleKey('KeyV');
++
++        await waitUntil(
++          () => {
++            const snap = window.carLab?.snapshot();
++            return Boolean(snap && snap.contacts >= 1 && snap.displaced > 0);
++          },
++          `cycle ${i} crash test wall contact and deformation`,
++          15000,
++        );
++
++        const crashSnap = window.carLab?.snapshot();
++        const crashContactsBeforeDispose = crashSnap?.contacts ?? 0;
++        const crashDisplacedBeforeDispose = crashSnap?.displaced ?? 0;
++
++        const rendererInfoBeforeDispose = window.carLab
++          ? { ...window.carLab.rendererInfo }
++          : { calls: 0, triangles: 0, geometries: 0, textures: 0 };
++        const trackedResourcesBeforeDispose = readyEngine.resources.counts();
++
++        // Unmount StrictMode tree
++        root.unmount();
++        await readyEngine.audio.waitForClose();
++        await new Promise((r) => setTimeout(r, 40));
++
++        const trackedResourcesAfterDispose = readyEngine.resources.counts();
++        const rendererMemoryAfterDispose = readyEngine.getMemoryInfo();
++        const engineIsDisposed = readyEngine.isDisposed();
++        const activeAfterUnmount = createdEngines.filter((e) => !e.isDisposed() || e.isLoopActive()).length;
++        const activeRafsAfterUnmount = probe.getActiveRafCount();
++        const glCanvasCountAfterUnmount = host.querySelectorAll('canvas#gl').length;
++        const carLabAfterUnmount = window.carLab !== undefined;
++        const audioClosedAfterUnmount = readyEngine.audio.isDisposed();
++
++        host.remove();
++
++        cycles.push({
++          cycle: i,
++          totalCreatedDuringStrictModeMount: createdEngines.length,
++          activeDuringRun: activeEnginesDuringRun.length,
++          glCanvasCountDuringRun,
++          crashContactsBeforeDispose,
++          crashDisplacedBeforeDispose,
++          rendererInfoBeforeDispose,
++          trackedResourcesBeforeDispose,
++          trackedResourcesAfterDispose,
++          rendererMemoryAfterDispose,
++          engineIsDisposed,
++          activeAfterUnmount,
++          activeRafsAfterUnmount,
++          glCanvasCountAfterUnmount,
++          carLabAfterUnmount,
++          audioClosedAfterUnmount,
++        });
++      }
++
++      return {
++        capturedAt: new Date().toISOString(),
++        audioInitFailureProbe,
++        cycles,
++        finalAudioStates: probe.getAudioStates(),
++      };
++    });
++
++    await fs.writeFile(
++      path.join(EVIDENCE_DIR, 'cleanup-probe.json'),
++      JSON.stringify({ ...probeReport, consoleErrors, pageErrors }, null, 2),
++      'utf8',
++    );
++
++    assert.equal(consoleErrors.length, 0, `Unexpected console.error during lifecycle probe: ${consoleErrors.join('; ')}`);
++    assert.equal(pageErrors.length, 0, `Unexpected pageerror during lifecycle probe: ${pageErrors.join('; ')}`);
++
++    // Verify real-browser SoundEngine partial init failure probe
++    assert.equal(probeReport.audioInitFailureProbe.initResult, false, 'Failed SoundEngine.init must return false');
++    assert.equal(probeReport.audioInitFailureProbe.ctxAfterFailure, false, 'Failed SoundEngine.init must clear ctx');
++    assert.equal(
++      probeReport.audioInitFailureProbe.closeCallsDelta,
++      1,
++      'Failed SoundEngine.init must call AudioContext.close() exactly once',
++    );
++    assert(
++      probeReport.audioInitFailureProbe.statesAfterWaitForClose.every((s) => s === 'closed'),
++      'AudioContext created during failed SoundEngine.init must transition to closed',
++    );
++
++    assert.equal(probeReport.cycles.length, 5);
++    for (const c of probeReport.cycles) {
++      assert(
++        c.totalCreatedDuringStrictModeMount >= 2,
++        `Cycle ${c.cycle}: StrictMode must exercise mount->unmount->remount (created=${c.totalCreatedDuringStrictModeMount})`,
++      );
++      assert.equal(c.activeDuringRun, 1, `Cycle ${c.cycle}: Exactly 1 active engine allowed during run`);
++      assert.equal(c.glCanvasCountDuringRun, 1, `Cycle ${c.cycle}: Exactly 1 WebGL #gl canvas allowed during run`);
++      assert(c.crashContactsBeforeDispose >= 1, `Cycle ${c.cycle}: Crash test must record wall contact before unmount`);
++      assert(c.crashDisplacedBeforeDispose > 0, `Cycle ${c.cycle}: Crash test must deform vertices before unmount`);
++      assert(c.trackedResourcesBeforeDispose.geometries > 20, `Cycle ${c.cycle}: Expected tracked geometries > 20`);
++      assert(c.trackedResourcesBeforeDispose.materials > 15, `Cycle ${c.cycle}: Expected tracked materials > 15`);
++      assert(c.trackedResourcesBeforeDispose.textures > 10, `Cycle ${c.cycle}: Expected tracked textures > 10`);
++      assert(c.trackedResourcesBeforeDispose.renderTargets >= 2, `Cycle ${c.cycle}: Expected PMREM render targets >= 2`);
++      assert.deepEqual(
++        c.trackedResourcesAfterDispose,
++        { geometries: 0, materials: 0, textures: 0, renderTargets: 0 },
++        `Cycle ${c.cycle}: All tracked GPU resources must be drained on dispose()`,
++      );
++      assert.deepEqual(
++        c.rendererMemoryAfterDispose,
++        { geometries: 0, textures: 0 },
++        `Cycle ${c.cycle}: renderer.info.memory.geometries and textures must be 0 after dispose()`,
++      );
++      assert.equal(c.engineIsDisposed, true, `Cycle ${c.cycle}: engine.isDisposed() must be true after unmount`);
++      assert.equal(c.activeAfterUnmount, 0, `Cycle ${c.cycle}: Zero active engines allowed after unmount`);
++      assert.equal(c.activeRafsAfterUnmount, 0, `Cycle ${c.cycle}: Zero active RAF callbacks allowed after unmount`);
++      assert.equal(c.glCanvasCountAfterUnmount, 0, `Cycle ${c.cycle}: WebGL #gl canvas must be removed on unmount`);
++      assert.equal(c.carLabAfterUnmount, false, `Cycle ${c.cycle}: window.carLab must be cleaned up on unmount`);
++      assert.equal(c.audioClosedAfterUnmount, true, `Cycle ${c.cycle}: SoundEngine must be disposed on unmount`);
++    }
++
++    for (const state of probeReport.finalAudioStates) {
++      assert.equal(state, 'closed', 'Every created AudioContext must be closed after unmount');
++    }
++  } finally {
++    await context.close();
++  }
++});
+diff --git a/web/tests/engine.test.ts b/web/tests/engine.test.ts
+index 87cb041..6a5f20b 100644
+--- a/web/tests/engine.test.ts
++++ b/web/tests/engine.test.ts
+@@ -1,7 +1,10 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
++import * as THREE from 'three';
+ import { GameEngine } from '../src/game/GameEngine.ts';
++import { SoundEngine } from '../src/game/audio/soundEngine.ts';
+ import { InputController, isInteractiveTarget } from '../src/game/input/inputController.ts';
++import { ResourceTracker } from '../src/game/rendering/resourceTracker.ts';
+ import type { StorageAdapter } from '../src/storage/settingsStore.ts';
+ 
+ function createMemoryStorage(): StorageAdapter & { data: Map<string, string> } {
+@@ -17,7 +20,17 @@ function createMemoryStorage(): StorageAdapter & { data: Map<string, string> } {
+   };
+ }
+ 
+-test('Engine creation, snapshot subscription, and idempotent dispose()', () => {
++function spyDispose<T extends { dispose: () => void }>(resource: T): { resource: T; getCount: () => number } {
++  let count = 0;
++  const orig = resource.dispose.bind(resource);
++  resource.dispose = () => {
++    count++;
++    orig();
++  };
++  return { resource, getCount: () => count };
++}
++
++test('Headless GameEngine creation, snapshot subscription, and idempotent dispose()', () => {
+   const storage = createMemoryStorage();
+   const engine = new GameEngine({ headless: true, storage });
+   let notifications = 0;
+@@ -28,22 +41,24 @@ test('Engine creation, snapshot subscription, and idempotent dispose()', () => {
+   engine.init(null);
+   assert.equal(engine.getSnapshot().ready, true);
+   assert.equal(engine.getSnapshot().started, false);
++  assert.equal(engine.isDisposed(), false);
+   assert(notifications >= 1);
+ 
+   // Calling dispose multiple times must be safe and idempotent
+   engine.dispose();
++  assert.equal(engine.isDisposed(), true);
+   engine.dispose();
+ 
+   const countBefore = notifications;
+   engine.start(); // ignored after dispose
++  engine.dispatch({ type: 'HOTKEY', code: 'KeyC' }); // ignored after dispose
+   assert.equal(notifications, countBefore);
+   unsubscribe();
+ });
+ 
+-test('StrictMode mount -> unmount -> remount lifecycle leaves only one active engine', () => {
++test('Headless GameEngine sequential dispose and recreate leaves only one active instance', () => {
+   const storage = createMemoryStorage();
+ 
+-  // First mount (StrictMode initial mount)
+   const firstEngine = new GameEngine({ headless: true, storage });
+   let firstUpdates = 0;
+   firstEngine.subscribe(() => {
+@@ -52,11 +67,9 @@ test('StrictMode mount -> unmount -> remount lifecycle leaves only one active en
+   firstEngine.init(null);
+   assert.equal(firstEngine.getSnapshot().ready, true);
+ 
+-  // StrictMode simulated unmount
+   firstEngine.dispose();
+   const frozenFirstUpdates = firstUpdates;
+ 
+-  // StrictMode simulated second mount
+   const secondEngine = new GameEngine({ headless: true, storage });
+   let secondUpdates = 0;
+   secondEngine.subscribe(() => {
+@@ -72,7 +85,185 @@ test('StrictMode mount -> unmount -> remount lifecycle leaves only one active en
+   secondEngine.dispose();
+ });
+ 
+-test('InputController clears pressed keys and touch state on clearAll() and ignores interactive form elements', () => {
++test('ResourceTracker disposes Mesh, InstancedMesh, Points, LineSegments, Sprite material, texture maps, and shader uniforms once without disposing shared Sprite geometry or external resources', () => {
++  const tracker = new ResourceTracker();
++  const scene = new THREE.Scene();
++
++  // 1. Shared geometry & material used by two meshes + map & roughnessMap textures
++  const sharedGeo = spyDispose(new THREE.BoxGeometry(1, 1, 1));
++  const mapTex = spyDispose(new THREE.Texture());
++  const roughTex = spyDispose(new THREE.Texture());
++  const sharedMat = spyDispose(
++    new THREE.MeshStandardMaterial({
++      map: mapTex.resource,
++      roughnessMap: roughTex.resource,
++    }),
++  );
++  const mesh1 = new THREE.Mesh(sharedGeo.resource, sharedMat.resource);
++  const mesh2 = new THREE.Mesh(sharedGeo.resource, sharedMat.resource);
++  scene.add(mesh1, mesh2);
++
++  // 2. Mesh with Material[] array
++  const multiGeo = spyDispose(new THREE.BufferGeometry());
++  const matA = spyDispose(new THREE.MeshBasicMaterial());
++  const matB = spyDispose(new THREE.MeshBasicMaterial());
++  const multiMesh = new THREE.Mesh(multiGeo.resource, [matA.resource, matB.resource]);
++  scene.add(multiMesh);
++
++  // 3. Points with ShaderMaterial and uniform texture
++  const pointsGeo = spyDispose(new THREE.BufferGeometry());
++  const uniformTex = spyDispose(new THREE.Texture());
++  const pointsMat = spyDispose(
++    new THREE.ShaderMaterial({
++      uniforms: {
++        map: { value: uniformTex.resource },
++        scale: { value: 500 },
++      },
++    }),
++  );
++  const points = new THREE.Points(pointsGeo.resource, pointsMat.resource);
++  scene.add(points);
++
++  // 4. LineSegments (cracks / crash sparks)
++  const lineGeo = spyDispose(new THREE.BufferGeometry());
++  const lineMat = spyDispose(new THREE.LineBasicMaterial());
++  const lines = new THREE.LineSegments(lineGeo.resource, lineMat.resource);
++  scene.add(lines);
++
++  // 5. Sprite (shares Three.js internal Sprite geometry, owns SpriteMaterial + glow texture)
++  const glowTex = spyDispose(new THREE.Texture());
++  const spriteMat = spyDispose(new THREE.SpriteMaterial({ map: glowTex.resource }));
++  const sprite = new THREE.Sprite(spriteMat.resource);
++  const spriteGeoSpy = spyDispose(sprite.geometry);
++  scene.add(sprite);
++
++  // 6. External shared resource that must NOT be disposed by this tracker
++  const externalGeo = spyDispose(new THREE.BoxGeometry(2, 2, 2));
++  const externalTex = spyDispose(new THREE.Texture());
++  const externalMat = spyDispose(new THREE.MeshBasicMaterial({ map: externalTex.resource }));
++  tracker.markExternal(externalGeo.resource);
++  tracker.markExternal(externalTex.resource);
++  tracker.markExternal(externalMat.resource);
++  scene.add(new THREE.Mesh(externalGeo.resource, externalMat.resource));
++
++  tracker.captureTree(scene);
++
++  // Detach mesh2 before dispose to verify detached objects are still cleaned up
++  scene.remove(mesh2);
++
++  tracker.dispose();
++  // Second dispose call must be a safe no-op
++  tracker.dispose();
++
++  assert.equal(sharedGeo.getCount(), 1, 'Shared geometry must be disposed exactly once');
++  assert.equal(sharedMat.getCount(), 1, 'Shared material must be disposed exactly once');
++  assert.equal(mapTex.getCount(), 1, 'Material map texture must be disposed once');
++  assert.equal(roughTex.getCount(), 1, 'Material roughnessMap texture must be disposed once');
++  assert.equal(multiGeo.getCount(), 1, 'Multi-material mesh geometry must be disposed once');
++  assert.equal(matA.getCount(), 1, 'Material array item A must be disposed once');
++  assert.equal(matB.getCount(), 1, 'Material array item B must be disposed once');
++  assert.equal(pointsGeo.getCount(), 1, 'Points geometry must be disposed once');
++  assert.equal(pointsMat.getCount(), 1, 'Points ShaderMaterial must be disposed once');
++  assert.equal(uniformTex.getCount(), 1, 'ShaderMaterial uniform texture must be disposed once');
++  assert.equal(lineGeo.getCount(), 1, 'LineSegments geometry must be disposed once');
++  assert.equal(lineMat.getCount(), 1, 'LineSegments material must be disposed once');
++  assert.equal(spriteMat.getCount(), 1, 'SpriteMaterial must be disposed once');
++  assert.equal(glowTex.getCount(), 1, 'Sprite glow texture must be disposed once');
++  assert.equal(spriteGeoSpy.getCount(), 0, 'Shared Three.js Sprite geometry must NEVER be disposed');
++  assert.equal(externalGeo.getCount(), 0, 'Externally owned geometry must not be disposed');
++  assert.equal(externalMat.getCount(), 0, 'Externally owned material must not be disposed');
++  assert.equal(externalTex.getCount(), 0, 'Externally owned texture must not be disposed');
++});
++
++test('ResourceTracker owns PMREM WebGLRenderTarget without double-disposing its texture and continues cleanup on error', () => {
++  const tracker = new ResourceTracker();
++  const pmremTarget = new THREE.WebGLRenderTarget(16, 16);
++  let targetDisposeCount = 0;
++  let texStandaloneDisposeCount = 0;
++  let insideTargetDispose = false;
++
++  const origTexDispose = pmremTarget.texture.dispose.bind(pmremTarget.texture);
++  pmremTarget.texture.dispose = () => {
++    if (!insideTargetDispose) {
++      texStandaloneDisposeCount++;
++    }
++    origTexDispose();
++  };
++
++  const origTargetDispose = pmremTarget.dispose.bind(pmremTarget);
++  pmremTarget.dispose = () => {
++    targetDisposeCount++;
++    insideTargetDispose = true;
++    try {
++      origTargetDispose();
++    } finally {
++      insideTargetDispose = false;
++    }
++  };
++
++  // Track both the render target and a material referencing its .texture as envMap
++  const envMat = spyDispose(new THREE.MeshStandardMaterial({ envMap: pmremTarget.texture }));
++  const badGeo = new THREE.BufferGeometry();
++  badGeo.dispose = () => {
++    throw new Error('Simulated geometry dispose failure');
++  };
++  const goodGeo = spyDispose(new THREE.BufferGeometry());
++
++  tracker.trackRenderTarget(pmremTarget);
++  tracker.trackGeometry(badGeo);
++  tracker.trackGeometry(goodGeo.resource);
++  tracker.trackMaterial(envMat.resource);
++
++  assert.throws(
++    () => tracker.dispose(),
++    /Simulated geometry dispose failure/,
++    'Dispose error must be surfaced after all other resources are cleaned up',
++  );
++
++  assert.equal(goodGeo.getCount(), 1, 'Remaining geometry must still be disposed after an earlier failure');
++  assert.equal(envMat.getCount(), 1, 'Material must still be disposed after geometry failure');
++  assert.equal(targetDisposeCount, 1, 'PMREM WebGLRenderTarget must be disposed once');
++  assert.equal(
++    texStandaloneDisposeCount,
++    0,
++    'PMREM render target texture must not be disposed separately from its owning RenderTarget',
++  );
++
++  // Subsequent dispose() must be idempotent and not throw again
++  assert.doesNotThrow(() => tracker.dispose());
++});
++
++test('window.carLab diagnostic ownership only removes its own instance token on dispose()', () => {
++  const prevWindow = (globalThis as { window?: unknown }).window;
++  const mockWindow: Record<string, unknown> = {};
++  (globalThis as { window?: unknown }).window = mockWindow;
++
++  try {
++    const engineA = new GameEngine({ headless: true, storage: createMemoryStorage() });
++    const engineB = new GameEngine({ headless: true, storage: createMemoryStorage() });
++
++    // Invoke registerGlobalDiagnostics via private method access for headless verification
++    (engineA as unknown as { registerGlobalDiagnostics: () => void }).registerGlobalDiagnostics();
++    const tokenA = mockWindow.carLab;
++    assert(tokenA, 'engineA should register window.carLab');
++
++    (engineB as unknown as { registerGlobalDiagnostics: () => void }).registerGlobalDiagnostics();
++    const tokenB = mockWindow.carLab;
++    assert(tokenB && tokenB !== tokenA, 'engineB should replace window.carLab with its own token');
++
++    // Disposing older engineA must NOT delete engineB's window.carLab
++    engineA.dispose();
++    assert.equal(mockWindow.carLab, tokenB, 'Disposing old engine must not clobber newer engine carLab');
++
++    // Disposing active engineB MUST delete its own window.carLab so no closure retains engineB
++    engineB.dispose();
++    assert.equal(mockWindow.carLab, undefined, 'Disposing active engine must remove window.carLab');
++  } finally {
++    (globalThis as { window?: unknown }).window = prevWindow;
++  }
++});
++
++test('InputController separates interactive UI focus (buttons, child spans/SVGs, inputs) from driving keys and prevents stuck keys', () => {
+   let started = false;
+   const toggled: string[] = [];
+   const input = new InputController({
+@@ -83,13 +274,41 @@ test('InputController clears pressed keys and touch state on clearAll() and igno
+     onToggleKey: (code) => toggled.push(code),
+   });
+ 
++  // Verify interactive targets including BUTTON, child span/svg inside BUTTON, role="button", A[href], INPUT, TEXTAREA, DIALOG
++  const buttonEl = { tagName: 'BUTTON' };
++  const childSpanInsideButton = { tagName: 'SPAN', parentElement: buttonEl };
++  const childSvgPathInsideButton = { tagName: 'path', parentElement: { tagName: 'svg', parentElement: buttonEl } };
++  const roleButtonEl = { tagName: 'DIV', getAttribute: (k: string) => (k === 'role' ? 'button' : null) };
++  const canvasEl = { tagName: 'CANVAS', id: 'gl' };
++  const viewportDiv = { tagName: 'DIV', id: 'gl-viewport' };
++
++  assert.equal(isInteractiveTarget(buttonEl as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget(childSpanInsideButton as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget(childSvgPathInsideButton as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget(roleButtonEl as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget({ tagName: 'INPUT' } as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget({ tagName: 'TEXTAREA' } as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget({ tagName: 'SELECT' } as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget({ tagName: 'DIALOG' } as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget({ tagName: 'DIV', isContentEditable: true } as unknown as EventTarget), true);
++  assert.equal(isInteractiveTarget(canvasEl as unknown as EventTarget), false);
++  assert.equal(isInteractiveTarget(viewportDiv as unknown as EventTarget), false);
++
++  // Simulate driving with KeyW held down, then focus moves to an interactive element -> clearKeys() releases KeyW
+   input.keys.KeyW = true;
+-  input.keys.KeyA = true;
++  input.keys.Space = true;
++  assert.equal(input.readInput().throttle, 1);
++  assert.equal(input.readInput().handbrake, true);
++
++  input.clearKeys();
++  assert.equal(input.readInput().throttle, 0);
++  assert.equal(input.readInput().handbrake, false);
++
++  // Touch input and clearAll
+   input.setTouch('throttle', true);
+   input.setTouch('handbrake', true);
+   assert.equal(started, true);
+   assert.equal(input.readInput().throttle, 1);
+-  assert.equal(input.readInput().steer, 1);
+   assert.equal(input.readInput().handbrake, true);
+ 
+   input.clearAll();
+@@ -98,16 +317,9 @@ test('InputController clears pressed keys and touch state on clearAll() and igno
+   assert.equal(afterClear.brake, 0);
+   assert.equal(afterClear.steer, 0);
+   assert.equal(afterClear.handbrake, false);
+-
+-  // Verify interactive targets (input, textarea, dialog) are detected so hotkeys do not misfire
+-  assert.equal(isInteractiveTarget({ tagName: 'INPUT' } as unknown as EventTarget), true);
+-  assert.equal(isInteractiveTarget({ tagName: 'TEXTAREA' } as unknown as EventTarget), true);
+-  assert.equal(isInteractiveTarget({ tagName: 'DIALOG' } as unknown as EventTarget), true);
+-  assert.equal(isInteractiveTarget({ tagName: 'DIV', isContentEditable: true } as unknown as EventTarget), true);
+-  assert.equal(isInteractiveTarget({ tagName: 'DIV', isContentEditable: false } as unknown as EventTarget), false);
+ });
+ 
+-test('UI commands synchronize with GameEngine state and persist localStorage keys', () => {
++test('Headless GameEngine UI commands synchronize state and persist localStorage keys', () => {
+   const storage = createMemoryStorage();
+   const engine = new GameEngine({ headless: true, storage });
+   engine.init(null);
+@@ -181,3 +393,171 @@ test('UI commands synchronize with GameEngine state and persist localStorage key
+ 
+   engine.dispose();
+ });
++
++test('SoundEngine cleans up partial nodes and closes AudioContext when initialization throws midway', async () => {
++  const prevWindow = (globalThis as { window?: unknown }).window;
++
++  interface MockNode {
++    connected: number;
++    disconnected: number;
++    started: number;
++    stopped: number;
++    connect: () => void;
++    disconnect: () => void;
++    start: () => void;
++    stop: () => void;
++    gain: { value: number; setTargetAtTime: () => void; setValueAtTime: () => void; exponentialRampToValueAtTime: () => void };
++    frequency: { value: number; setTargetAtTime: () => void; setValueAtTime: () => void; exponentialRampToValueAtTime: () => void };
++    Q: { value: number };
++    type: string;
++    curve: Float32Array | null;
++    buffer: unknown;
++    loop: boolean;
++  }
++
++  const createdNodes: MockNode[] = [];
++  const makeNode = (): MockNode => {
++    const node: MockNode = {
++      connected: 0,
++      disconnected: 0,
++      started: 0,
++      stopped: 0,
++      connect() {
++        this.connected++;
++      },
++      disconnect() {
++        this.disconnected++;
++      },
++      start() {
++        this.started++;
++      },
++      stop() {
++        if (this.started === 0) {
++          throw new Error('InvalidStateError: cannot call stop without start');
++        }
++        this.stopped++;
++      },
++      gain: {
++        value: 0,
++        setTargetAtTime: () => {},
++        setValueAtTime: () => {},
++        exponentialRampToValueAtTime: () => {},
++      },
++      frequency: {
++        value: 0,
++        setTargetAtTime: () => {},
++        setValueAtTime: () => {},
++        exponentialRampToValueAtTime: () => {},
++      },
++      Q: { value: 0 },
++      type: 'lowpass',
++      curve: null,
++      buffer: null,
++      loop: false,
++    };
++    createdNodes.push(node);
++    return node;
++  };
++
++  let failAt: 'createWaveShaper' | 'createBuffer' | 'none' = 'createWaveShaper';
++  const createdContexts: Array<{ state: string; closeCalls: number }> = [];
++
++  class FakeAudioContext {
++    public state = 'running';
++    public closeCalls = 0;
++    public sampleRate = 44100;
++    public currentTime = 0;
++    public destination = {};
++
++    constructor() {
++      createdContexts.push(this);
++    }
++
++    createGain() {
++      return makeNode();
++    }
++
++    createDynamicsCompressor() {
++      return makeNode();
++    }
++
++    createWaveShaper() {
++      if (failAt === 'createWaveShaper') {
++        throw new Error('Simulated createWaveShaper failure');
++      }
++      return makeNode();
++    }
++
++    createBiquadFilter() {
++      return makeNode();
++    }
++
++    createOscillator() {
++      return makeNode();
++    }
++
++    createBuffer(_channels: number, length: number) {
++      if (failAt === 'createBuffer') {
++        throw new Error('Simulated createBuffer failure after oscillators started');
++      }
++      return {
++        getChannelData: () => new Float32Array(length),
++      };
++    }
++
++    createBufferSource() {
++      return makeNode();
++    }
++
++    async close(): Promise<void> {
++      this.closeCalls++;
++      await new Promise((r) => setTimeout(r, 5));
++      this.state = 'closed';
++    }
++  }
++
++  (globalThis as { window?: unknown }).window = { AudioContext: FakeAudioContext };
++
++  try {
++    // Case A: Failure in createWaveShaper() right after master & compressor creation
++    const audioA = new SoundEngine();
++    const okA = audioA.init(true);
++    assert.equal(okA, false, 'init() must return false when createWaveShaper throws');
++    assert.equal(audioA.ctx, null, 'ctx reference must be cleared after failed init');
++    assert.equal(createdContexts.length, 1);
++
++    await audioA.waitForClose();
++    assert.equal(createdContexts[0].closeCalls, 1, 'Failed init() must call close() on the created AudioContext');
++    assert.equal(createdContexts[0].state, 'closed', 'AudioContext created before failure must transition to closed');
++    assert(
++      createdNodes.every((n) => n.disconnected >= 1),
++      'All partially created AudioNodes (master, compressor) must be disconnected on failure',
++    );
++
++    audioA.dispose();
++    await audioA.waitForClose();
++    assert.equal(createdContexts[0].closeCalls, 1, 'dispose() after failed init must not double-close AudioContext');
++
++    // Case B: Failure in createBuffer() after 3 oscillators + LFO have already started
++    createdNodes.length = 0;
++    failAt = 'createBuffer';
++    const audioB = new SoundEngine();
++    const okB = audioB.init(true);
++    assert.equal(okB, false, 'init() must return false when createBuffer throws');
++    assert.equal(audioB.ctx, null);
++    assert.equal(createdContexts.length, 2);
++
++    await audioB.waitForClose();
++    assert.equal(createdContexts[1].closeCalls, 1, 'Failed init() after oscillator start must close AudioContext');
++    assert.equal(createdContexts[1].state, 'closed');
++    const startedOscs = createdNodes.filter((n) => n.started > 0);
++    assert.equal(startedOscs.length, 4, '3 engine oscillators + 1 LFO were started before createBuffer threw');
++    assert(
++      startedOscs.every((n) => n.stopped === 1 && n.disconnected >= 1),
++      'All started oscillators must be stopped and disconnected when init() fails midway',
++    );
++  } finally {
++    (globalThis as { window?: unknown }).window = prevWindow;
++  }
++});
++
+diff --git a/web/tests/node-env.d.ts b/web/tests/node-env.d.ts
+index 3c1149f..1e2e81f 100644
+--- a/web/tests/node-env.d.ts
++++ b/web/tests/node-env.d.ts
+@@ -1,3 +1,8 @@
++declare const process: {
++  env: Record<string, string | undefined>;
++  cwd(): string;
++};
++
+ declare module 'node:test' {
+   export type TestFn = () => void | Promise<void>;
+   function test(name: string, fn: TestFn): Promise<void>;
+@@ -10,7 +15,11 @@ declare module 'node:assert/strict' {
+   function assert(value: unknown, message?: string): asserts value;
+   namespace assert {
+     function equal(actual: unknown, expected: unknown, message?: string): void;
++    function notEqual(actual: unknown, expected: unknown, message?: string): void;
++    function deepEqual(actual: unknown, expected: unknown, message?: string): void;
+     function match(value: string, regExp: RegExp, message?: string): void;
++    function throws(block: () => unknown, error?: RegExp | Error | object, message?: string): void;
++    function doesNotThrow(block: () => unknown, message?: string): void;
+   }
+   export default assert;
+ }
+@@ -19,6 +28,7 @@ declare module 'node:http' {
+   export type IncomingHttpHeaders = Record<string, string | string[] | undefined>;
+ 
+   export interface IncomingMessage {
++    url?: string;
+     statusCode?: number;
+     headers: IncomingHttpHeaders;
+     on(event: 'data', listener: (chunk: Uint8Array) => void): this;
+@@ -61,8 +71,11 @@ declare module 'node:http' {
+ declare module 'node:fs/promises' {
+   const fs: {
+     readFile(filePath: string, encoding: 'utf8'): Promise<string>;
++    writeFile(filePath: string, data: string, encoding?: 'utf8'): Promise<void>;
+     readdir(dirPath: string): Promise<string[]>;
+     access(filePath: string): Promise<void>;
++    mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<string | undefined>;
++    rm(targetPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+   };
+   export default fs;
+ }
+@@ -74,10 +87,3 @@ declare module 'node:path' {
+   };
+   export default path;
+ }
+-
+-declare module '../server/index.mjs' {
+-  import type http from 'node:http';
+-  export const ROOT: string;
+-  export const DIST: string;
+-  export function createLocalServer(distDir?: string): http.Server;
+-}

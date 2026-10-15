@@ -8,15 +8,13 @@ dist/
 web/dist/
 backend/dist/
 
-# Verification evidence & artifacts
-evidence/
-
 # Future Rust / Cargo build artifacts
 backend/target/
 target/
 
 # Logs & OS files
 *.log
+!evidence/*.log
 npm-debug.log*
 .DS_Store
 Thumbs.db

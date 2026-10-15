@@ -1,0 +1,29 @@
+{
+  "capturedAt": "2026-10-15T04:42:37.971Z",
+  "scenario1_focusedButtonSpace": {
+    "clicks": 1,
+    "tcsVal": "Off",
+    "activeKey": "KeyT",
+    "hbDuringSpace": false
+  },
+  "scenario2_focusedButtonEnter": {
+    "clicks": 2,
+    "tcsVal": "On"
+  },
+  "scenario3_canvasSpaceHandbrake": {
+    "speedBeforeHb": true,
+    "speedDuringHb": false
+  },
+  "scenario4_inputTypingW": {
+    "value": "w",
+    "speed": 0,
+    "rpm": 850
+  },
+  "scenario5_focusShiftWhileHoldingW": {
+    "rpmWhileHeld": 2523.1768760217706,
+    "rpmAfterFocusShiftRelease": 1305.9938940852612
+  },
+  "scenario6_startFocusesCanvas": {
+    "activeAfterStart": "gl"
+  }
+}

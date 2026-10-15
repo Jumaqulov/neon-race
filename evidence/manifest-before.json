@@ -1,0 +1,248 @@
+﻿{
+    "generatedAt":  "2026-10-14T17:06:49.2029549+05:00",
+    "commit":  "0e0d45cf55fdf48118dd68f5285d5130a91f9626",
+    "branch":  "fix/audit-hardening",
+    "fileCount":  48,
+    "files":  [
+                  {
+                      "path":  ".gitignore",
+                      "size":  301,
+                      "sha256":  "6B9290F22D7B2B90E3A61B8B71D08B885C3E01691485CEDFDA703AAFC6737993"
+                  },
+                  {
+                      "path":  "backend/package.json",
+                      "size":  406,
+                      "sha256":  "1AE6592D2E8B864A1836B69959D732AEA0402D5BA4B63172DF1FB029A40B379C"
+                  },
+                  {
+                      "path":  "backend/README.md",
+                      "size":  547,
+                      "sha256":  "FCFC335B97D0FD2C6644AC943D594D069A0DAB315BC5214150776E4938EF72C4"
+                  },
+                  {
+                      "path":  "backend/src/index.d.mts",
+                      "size":  192,
+                      "sha256":  "57614A71A57177DEF458744688BD01FF8EC129E1F0D20EAE85F72AA4E3B63482"
+                  },
+                  {
+                      "path":  "backend/src/index.mjs",
+                      "size":  6014,
+                      "sha256":  "09EDECA4B0DCBEA3E827328B3ED116499EDC8B15A05738D9F21638060D9FBF44"
+                  },
+                  {
+                      "path":  "backend/tests/node-env.d.ts",
+                      "size":  2306,
+                      "sha256":  "68BB10B4F45B8836B5225C24191099DBE190016126ED51A5AE4FC1737F4822CB"
+                  },
+                  {
+                      "path":  "backend/tests/server.test.ts",
+                      "size":  5685,
+                      "sha256":  "79E2F2AA0766899A5460B9921A93E2568C1BF9349C97A6D02A1F9FED3526CD9E"
+                  },
+                  {
+                      "path":  "backend/tsconfig.json",
+                      "size":  67,
+                      "sha256":  "038C455CE032F9DE21F160C9A835A8C6DFB3D790AE45FEB19963200ACF9AE9A8"
+                  },
+                  {
+                      "path":  "eslint.config.mjs",
+                      "size":  727,
+                      "sha256":  "576D5441105A511490A586C74B6A97FBF7EFCC1CEF396F41350EE98156D7D452"
+                  },
+                  {
+                      "path":  "MIGRATION.md",
+                      "size":  4652,
+                      "sha256":  "DA7A1FA9F82E87D6D0A8BCA6396528D7231D043DAB2DF0866C4E1B893702C3B3"
+                  },
+                  {
+                      "path":  "original/muscle-car-v3.html",
+                      "size":  164118,
+                      "sha256":  "BFF6B1B3F8B63902ED7CE6FE6A5C312160DA57F522D80DB48EC8CDE68AEB1C92"
+                  },
+                  {
+                      "path":  "package.json",
+                      "size":  869,
+                      "sha256":  "C9010A171ABBD54EBD3DB49C5B508E26189A3DC4A137CD8953E3E02899B2B5D2"
+                  },
+                  {
+                      "path":  "package-lock.json",
+                      "size":  115959,
+                      "sha256":  "800662D8C0DE21A2C179FC6BB6E05F4E1F8CBA2056F7EB6316BC5D5E4FF40269"
+                  },
+                  {
+                      "path":  "README_UZ.md",
+                      "size":  4025,
+                      "sha256":  "F8E6407CBACDD2588FE87420604C2F5D027B50D60F2D12E91314268536006464"
+                  },
+                  {
+                      "path":  "START-LOCAL.cmd",
+                      "size":  57,
+                      "sha256":  "BC7FC7F486B6719ECB3C08A028E46DDC4204F0C4FA17C5A298D874093C73D4D6"
+                  },
+                  {
+                      "path":  "tsconfig.json",
+                      "size":  579,
+                      "sha256":  "B6E0827211FB9790B193FB6CE054A8E5B4F0095ABA858FC92728E42CDB66EE05"
+                  },
+                  {
+                      "path":  "web/index.html",
+                      "size":  398,
+                      "sha256":  "0F6EBF1E9B5A0D0190F790FCBD570C30FF047AFD63F8C0335120E89568EFDAEC"
+                  },
+                  {
+                      "path":  "web/package.json",
+                      "size":  817,
+                      "sha256":  "FC83B3DB3BA177EA348405220183CCB06F0CE1313B7C3B38FB43289D2CE9D7B5"
+                  },
+                  {
+                      "path":  "web/src/app/App.tsx",
+                      "size":  1878,
+                      "sha256":  "CD96074EECA355F2E54D0596EEE62547F88BD70454B6BCC5960A4E4899F4C5AD"
+                  },
+                  {
+                      "path":  "web/src/components/GameHud.tsx",
+                      "size":  7361,
+                      "sha256":  "41434B497C846633C367E85187144C9817C5847481CF075F6AB872196159D134"
+                  },
+                  {
+                      "path":  "web/src/components/GameToolbar.tsx",
+                      "size":  6155,
+                      "sha256":  "429259193BC96BEA6466C323065B57625C8B5EA14CB612B685F32D6298D5DB01"
+                  },
+                  {
+                      "path":  "web/src/components/GameViewport.tsx",
+                      "size":  665,
+                      "sha256":  "4184CD371EFB631EE9FD035FC0CBD51EB627E03F58BA549C8033BD53F039FE91"
+                  },
+                  {
+                      "path":  "web/src/components/StartScreen.tsx",
+                      "size":  2891,
+                      "sha256":  "10ED58779F380DFCBD195486BF4D31C55EEBC76B2F0458F2E9CE299C5B56848A"
+                  },
+                  {
+                      "path":  "web/src/components/TouchControls.tsx",
+                      "size":  3431,
+                      "sha256":  "7CD994A50F6D6205C87344EA9468EA9637BD81263A629EF4EAE0C0F71E4ECE22"
+                  },
+                  {
+                      "path":  "web/src/game/audio/soundEngine.ts",
+                      "size":  7742,
+                      "sha256":  "6702559018BE779C7D231D6937604C8086103954C0D79DD4E455DD6E05E093D0"
+                  },
+                  {
+                      "path":  "web/src/game/camera/cameraController.ts",
+                      "size":  6796,
+                      "sha256":  "3BE63162F1418C34B71763F35048899675F158E5C57FAAE8D533911395288880"
+                  },
+                  {
+                      "path":  "web/src/game/damage/debris.ts",
+                      "size":  15352,
+                      "sha256":  "AF2F6DD65D6B5469BCA285099ED47B9FCDAD0E5CE0376A095747B17FCB9E035F"
+                  },
+                  {
+                      "path":  "web/src/game/damage/deformation.ts",
+                      "size":  3352,
+                      "sha256":  "7ABC5CFD3C747161AA5E3705BF71E7B9005C44D22BDC566AF5C35A2F2DE12B54"
+                  },
+                  {
+                      "path":  "web/src/game/damage/vehicleDamage.ts",
+                      "size":  18182,
+                      "sha256":  "C71C350E0C6DE89F44CD976E8D5F4535A827E2EDE9AB8FF1A3E71F345C6B5DE5"
+                  },
+                  {
+                      "path":  "web/src/game/effects/particles.ts",
+                      "size":  14108,
+                      "sha256":  "2ABF155D2F08A0051C92DBD717C11EEA637246E8E54FCEF47B13C559941D99A7"
+                  },
+                  {
+                      "path":  "web/src/game/GameEngine.ts",
+                      "size":  45438,
+                      "sha256":  "098EF03AAA47A6857C6FB630531E4FC7C2D1C88B294EEECF6AB293378F044BE2"
+                  },
+                  {
+                      "path":  "web/src/game/input/inputController.ts",
+                      "size":  4561,
+                      "sha256":  "BEFCC30C19E361C5D2B93AB44EB6D3CE1A5C3331565E3F9189F2936BFD4A451A"
+                  },
+                  {
+                      "path":  "web/src/game/physics/carPhysics.ts",
+                      "size":  21411,
+                      "sha256":  "F95BB63DD8372093E08D052A01647C639CA6FD88265819F33A9CACA4D2E11919"
+                  },
+                  {
+                      "path":  "web/src/game/physics/collisions.ts",
+                      "size":  3474,
+                      "sha256":  "78967BAFEAF4797D7953FA894B3D6CFFEA668D1627A072EC55EFA470E3C06571"
+                  },
+                  {
+                      "path":  "web/src/game/rendering/adaptiveQuality.ts",
+                      "size":  3665,
+                      "sha256":  "929EB994B98E4E96EE97B81642BBF6F3F50B2D718756776C4FE5AF9BC8AD4633"
+                  },
+                  {
+                      "path":  "web/src/game/rendering/batching.ts",
+                      "size":  8193,
+                      "sha256":  "F4D2AA1F0F602A2E0FCB06B259EE8D8A814F4BE803F96E7076AF755C657B8DD9"
+                  },
+                  {
+                      "path":  "web/src/game/rendering/gauges.ts",
+                      "size":  6873,
+                      "sha256":  "E0BBF07F88CD28DE0DD9AA4D26665E6EEEF6B43303E323D8932D02DF0D9C0D55"
+                  },
+                  {
+                      "path":  "web/src/game/vehicle/muscleCar.ts",
+                      "size":  36326,
+                      "sha256":  "D99C11F1F8C4E4A98D2F9324E9E1BFD989899BCA9E583914B70BED243A972DE9"
+                  },
+                  {
+                      "path":  "web/src/game/world/worldBuilder.ts",
+                      "size":  16764,
+                      "sha256":  "9008C30EF9C93C290E19C1CE8AF50C76E2762EE786E6062EE36D6AD423B26AA8"
+                  },
+                  {
+                      "path":  "web/src/main.tsx",
+                      "size":  341,
+                      "sha256":  "41359AA9910EF93628F91E36F9353CDC09E0796290EC03BF39717DE7F014F749"
+                  },
+                  {
+                      "path":  "web/src/shared/types.ts",
+                      "size":  3835,
+                      "sha256":  "FB6949A9FD2392CA11621C1530714C49B904D22AC1F2A86EF115FB839935B700"
+                  },
+                  {
+                      "path":  "web/src/storage/settingsStore.ts",
+                      "size":  1680,
+                      "sha256":  "9934361FF0B20E33CD5F9A9200D7FAE986F22112B68FE9BF75CC933FA46B5778"
+                  },
+                  {
+                      "path":  "web/src/styles/game.css",
+                      "size":  13608,
+                      "sha256":  "A9CCB55B2F5844E95DFAB4067D124BE3692A472C9844C582C0F01B94A9432CC8"
+                  },
+                  {
+                      "path":  "web/tests/engine.test.ts",
+                      "size":  6831,
+                      "sha256":  "D671E9D57821A388EB0DF1EB5D1659481FD39940629D0FF2250A75B0AA51FE45"
+                  },
+                  {
+                      "path":  "web/tests/node-env.d.ts",
+                      "size":  2306,
+                      "sha256":  "68BB10B4F45B8836B5225C24191099DBE190016126ED51A5AE4FC1737F4822CB"
+                  },
+                  {
+                      "path":  "web/tests/physics.test.ts",
+                      "size":  8226,
+                      "sha256":  "B53754478D1CBC985A37C45094F55C903430A1441469690F00B3E94A964032CE"
+                  },
+                  {
+                      "path":  "web/tsconfig.json",
+                      "size":  67,
+                      "sha256":  "038C455CE032F9DE21F160C9A835A8C6DFB3D790AE45FEB19963200ACF9AE9A8"
+                  },
+                  {
+                      "path":  "web/vite.config.ts",
+                      "size":  373,
+                      "sha256":  "0BB296F4F941EE33FAC3D7C8594977545E8F082259D324F51BCC55073F2ED70F"
+                  }
+              ]
+}

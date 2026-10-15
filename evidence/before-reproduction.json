@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-14T12:14:31.406Z",
+  "baseUrl": "http://127.0.0.1:51698",
+  "chromiumVersion": "151.0.7922.34",
+  "p1InputBugReproduced": {
+    "beforeTcsText": "On",
+    "afterSpaceTcsText": "On",
+    "buttonActivatedBySpace": false
+  }
+}

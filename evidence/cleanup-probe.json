@@ -1,0 +1,204 @@
+{
+  "capturedAt": "2026-10-15T04:43:33.402Z",
+  "audioInitFailureProbe": {
+    "initResult": false,
+    "ctxAfterFailure": false,
+    "closeCallsDelta": 1,
+    "statesAfterWaitForClose": [
+      "closed"
+    ],
+    "disposed": true
+  },
+  "cycles": [
+    {
+      "cycle": 1,
+      "totalCreatedDuringStrictModeMount": 2,
+      "activeDuringRun": 1,
+      "glCanvasCountDuringRun": 1,
+      "crashContactsBeforeDispose": 1,
+      "crashDisplacedBeforeDispose": 12080,
+      "rendererInfoBeforeDispose": {
+        "calls": 108,
+        "triangles": 145972,
+        "geometries": 104,
+        "textures": 23
+      },
+      "trackedResourcesBeforeDispose": {
+        "geometries": 324,
+        "materials": 88,
+        "textures": 25,
+        "renderTargets": 2
+      },
+      "trackedResourcesAfterDispose": {
+        "geometries": 0,
+        "materials": 0,
+        "textures": 0,
+        "renderTargets": 0
+      },
+      "rendererMemoryAfterDispose": {
+        "geometries": 0,
+        "textures": 0
+      },
+      "engineIsDisposed": true,
+      "activeAfterUnmount": 0,
+      "activeRafsAfterUnmount": 0,
+      "glCanvasCountAfterUnmount": 0,
+      "carLabAfterUnmount": false,
+      "audioClosedAfterUnmount": true
+    },
+    {
+      "cycle": 2,
+      "totalCreatedDuringStrictModeMount": 2,
+      "activeDuringRun": 1,
+      "glCanvasCountDuringRun": 1,
+      "crashContactsBeforeDispose": 1,
+      "crashDisplacedBeforeDispose": 12080,
+      "rendererInfoBeforeDispose": {
+        "calls": 108,
+        "triangles": 145972,
+        "geometries": 104,
+        "textures": 23
+      },
+      "trackedResourcesBeforeDispose": {
+        "geometries": 324,
+        "materials": 88,
+        "textures": 25,
+        "renderTargets": 2
+      },
+      "trackedResourcesAfterDispose": {
+        "geometries": 0,
+        "materials": 0,
+        "textures": 0,
+        "renderTargets": 0
+      },
+      "rendererMemoryAfterDispose": {
+        "geometries": 0,
+        "textures": 0
+      },
+      "engineIsDisposed": true,
+      "activeAfterUnmount": 0,
+      "activeRafsAfterUnmount": 0,
+      "glCanvasCountAfterUnmount": 0,
+      "carLabAfterUnmount": false,
+      "audioClosedAfterUnmount": true
+    },
+    {
+      "cycle": 3,
+      "totalCreatedDuringStrictModeMount": 2,
+      "activeDuringRun": 1,
+      "glCanvasCountDuringRun": 1,
+      "crashContactsBeforeDispose": 1,
+      "crashDisplacedBeforeDispose": 12080,
+      "rendererInfoBeforeDispose": {
+        "calls": 108,
+        "triangles": 145972,
+        "geometries": 104,
+        "textures": 23
+      },
+      "trackedResourcesBeforeDispose": {
+        "geometries": 324,
+        "materials": 88,
+        "textures": 25,
+        "renderTargets": 2
+      },
+      "trackedResourcesAfterDispose": {
+        "geometries": 0,
+        "materials": 0,
+        "textures": 0,
+        "renderTargets": 0
+      },
+      "rendererMemoryAfterDispose": {
+        "geometries": 0,
+        "textures": 0
+      },
+      "engineIsDisposed": true,
+      "activeAfterUnmount": 0,
+      "activeRafsAfterUnmount": 0,
+      "glCanvasCountAfterUnmount": 0,
+      "carLabAfterUnmount": false,
+      "audioClosedAfterUnmount": true
+    },
+    {
+      "cycle": 4,
+      "totalCreatedDuringStrictModeMount": 2,
+      "activeDuringRun": 1,
+      "glCanvasCountDuringRun": 1,
+      "crashContactsBeforeDispose": 1,
+      "crashDisplacedBeforeDispose": 12080,
+      "rendererInfoBeforeDispose": {
+        "calls": 108,
+        "triangles": 145972,
+        "geometries": 104,
+        "textures": 23
+      },
+      "trackedResourcesBeforeDispose": {
+        "geometries": 324,
+        "materials": 88,
+        "textures": 25,
+        "renderTargets": 2
+      },
+      "trackedResourcesAfterDispose": {
+        "geometries": 0,
+        "materials": 0,
+        "textures": 0,
+        "renderTargets": 0
+      },
+      "rendererMemoryAfterDispose": {
+        "geometries": 0,
+        "textures": 0
+      },
+      "engineIsDisposed": true,
+      "activeAfterUnmount": 0,
+      "activeRafsAfterUnmount": 0,
+      "glCanvasCountAfterUnmount": 0,
+      "carLabAfterUnmount": false,
+      "audioClosedAfterUnmount": true
+    },
+    {
+      "cycle": 5,
+      "totalCreatedDuringStrictModeMount": 2,
+      "activeDuringRun": 1,
+      "glCanvasCountDuringRun": 1,
+      "crashContactsBeforeDispose": 1,
+      "crashDisplacedBeforeDispose": 12080,
+      "rendererInfoBeforeDispose": {
+        "calls": 108,
+        "triangles": 145972,
+        "geometries": 104,
+        "textures": 23
+      },
+      "trackedResourcesBeforeDispose": {
+        "geometries": 324,
+        "materials": 88,
+        "textures": 25,
+        "renderTargets": 2
+      },
+      "trackedResourcesAfterDispose": {
+        "geometries": 0,
+        "materials": 0,
+        "textures": 0,
+        "renderTargets": 0
+      },
+      "rendererMemoryAfterDispose": {
+        "geometries": 0,
+        "textures": 0
+      },
+      "engineIsDisposed": true,
+      "activeAfterUnmount": 0,
+      "activeRafsAfterUnmount": 0,
+      "glCanvasCountAfterUnmount": 0,
+      "carLabAfterUnmount": false,
+      "audioClosedAfterUnmount": true
+    }
+  ],
+  "finalAudioStates": [
+    "closed",
+    "closed",
+    "closed",
+    "closed",
+    "closed",
+    "closed"
+  ],
+  "consoleErrors": [],
+  "pageErrors": []
+}

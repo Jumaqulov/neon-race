@@ -1,0 +1,128 @@
+
+> neon-race@0.2.0 verify
+> npm run typecheck && npm run lint && npm run build && npm test && npm run test:e2e
+
+
+> neon-race@0.2.0 typecheck
+> npm --workspace=web run typecheck && npm --workspace=backend run typecheck
+
+
+> @neon-race/web@0.2.0 typecheck
+> tsc --noEmit
+
+
+> @neon-race/backend@0.2.0 typecheck
+> tsc --noEmit
+
+
+> neon-race@0.2.0 lint
+> eslint web/src web/tests backend/src backend/tests
+
+
+> neon-race@0.2.0 build
+> npm --workspace=web run build
+
+
+> @neon-race/web@0.2.0 build
+> tsc --noEmit && vite build
+
+vite v6.2.6 building for production...
+transforming...
+✓ 53 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.49 kB │ gzip:   0.35 kB
+dist/assets/index-DPaJl_yD.css   12.22 kB │ gzip:   3.34 kB
+dist/assets/index-C_Z9S04L.js   846.94 kB │ gzip: 237.76 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 2.19s
+
+> neon-race@0.2.0 test
+> npm --workspace=web run test && npm --workspace=backend run test
+
+
+> @neon-race/web@0.2.0 test
+> node --test tests/physics.test.ts tests/engine.test.ts
+
+✔ Headless GameEngine creation, snapshot subscription, and idempotent dispose() (2.3461ms)
+✔ Headless GameEngine sequential dispose and recreate leaves only one active instance (0.4506ms)
+✔ ResourceTracker disposes Mesh, InstancedMesh, Points, LineSegments, Sprite material, texture maps, and shader uniforms once without disposing shared Sprite geometry or external resources (1.7062ms)
+✔ ResourceTracker owns PMREM WebGLRenderTarget without double-disposing its texture and continues cleanup on error (0.6308ms)
+✔ window.carLab diagnostic ownership only removes its own instance token on dispose() (0.3972ms)
+✔ InputController separates interactive UI focus (buttons, child spans/SVGs, inputs) from driving keys and prevents stuck keys (0.5207ms)
+✔ Headless GameEngine UI commands synchronize state and persist localStorage keys (1.1598ms)
+✔ SoundEngine cleans up partial nodes and closes AudioContext when initialization throws midway (34.1317ms)
+✔ Idle stays stationary for 60 seconds (20.8284ms)
+✔ Full throttle accelerates straight without lateral drift (16.8151ms)
+✔ 100 km/h braking is stable and stops before reverse engages (5.4822ms)
+✔ Reverse requires a deliberate standstill hold (4.632ms)
+✔ A backwards bounce cannot auto-select reverse (0.5426ms)
+✔ Steering produces mirrored left/right turns (9.8686ms)
+✔ Ackermann gives the inside front wheel a larger steering angle (0.5201ms)
+✔ Wheel normal loads conserve the full vehicle weight (1.2845ms)
+✔ TCS limits power-induced wheelspin (4.2358ms)
+✔ Chassis damage affects engine power, steering and collision footprint (10.7644ms)
+✔ Direct wall impact dissipates energy, with a small rebound (0.4416ms)
+✔ Oblique collision does not create kinetic energy (4.8643ms)
+✔ High-speed pole cannot be skipped with adaptive microsteps (2.0711ms)
+✔ Repeated barrier contact stays finite and inside the arena (17.5586ms)
+✔ Crush increases with impact energy and remains bounded (0.6405ms)
+✔ Padded tyre barrier deforms less than concrete (0.126ms)
+✔ Invalid dt cannot contaminate physics state (0.0826ms)
+✔ 120 vs 240 Hz integration remains close (3.3536ms)
+✔ 30/60/144 FPS use the same fixed simulation duration (15.4466ms)
+✔ Long mixed-input stress run remains finite (243.6853ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 483.7375
+
+> @neon-race/backend@0.2.0 test
+> node --test tests/server.test.ts
+
+✔ Server binds only the loopback interface (2265.3109ms)
+✔ Health accurately reports local-only, not multiplayer (6.9891ms)
+✔ Production HTML is served with bundled local assets (2.4138ms)
+✔ Bundled CSS and JS assets in dist/ are served with correct MIME types (184.3283ms)
+✔ Source, config, and server files are never publicly served (3.5621ms)
+✔ Traversal and malformed path requests are rejected (2.3608ms)
+✔ Non-local Host headers are rejected (1.2658ms)
+✔ POST cannot modify files (0.6438ms)
+✔ HEAD returns metadata but no response body (0.9398ms)
+✔ CSP does not permit external scripts or evaluation (1.0309ms)
+✔ Source and built dist HTML, CSS, and JS files contain no external CDN, font or remote asset URL (offline readiness) (5.2676ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2765.1743
+
+> neon-race@0.2.0 test:e2e
+> npm --workspace=web run test:e2e
+
+
+> @neon-race/web@0.2.0 test:e2e
+> node --test tests/e2e.test.ts
+
+✔ E2E 1: Fresh production build runs offline with zero external network requests, zero console errors, and complete gameplay flow (Start -> Drive -> Steer -> Brake -> Camera -> Crash -> Repair -> Pause/Resume) (19779.0366ms)
+✔ E2E 2: Keyboard and UI focus separation in real browser (all 6 required focus & input scenarios) (9151.9704ms)
+✔ E2E 3: Real React StrictMode + WebGL GameViewport 5x mount -> run -> crash -> unmount lifecycle and audio init error cleanup probe (55401.809ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 85007.596
