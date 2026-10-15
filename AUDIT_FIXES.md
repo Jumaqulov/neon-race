@@ -25,7 +25,7 @@ Ushbu hujjat `D:\neon-race` monorepo loyihasida o‘tkazilgan texnik audit topil
   - `carLabToken` orqali `window.carLab` faqat joriy engine’ga tegishli bo‘lsagina o‘chiriladi (`if (window.carLab === this.carLabToken) delete window.carLab`).
   - `cleanupInternal()` barcha bosqichlarni (`RAF`, `toastTimer`, `input.detach()`, `cameraCtrl.detach()`, `audio.dispose()`, `resizeObserver.disconnect()`, DOM listenerlar, `resources.dispose()`, `scene.clear()`, `renderer.dispose()`) alohida `safeRun` bloklarida bajaradi va barcha og‘ir havolalarni (`car`, `world`, `smoke`, `engineVapor`, `exhaust`, `skids`, `parts`, `damage`, `crashParticles`, `glassShards`, `metalShards`, `quality`, `envs`, `envTargets`) `null` qiladi.
 - **`web/src/game/audio/soundEngine.ts` va `web/src/game/camera/cameraController.ts`**:
-  - `SoundEngine.dispose()` barcha oscillator va node’larni xavfsiz to‘xtatib uzadi, `ctx.close()` promise’ini `waitForClose()` orqali кузатиш imkonini beradi.
+  - `SoundEngine.cleanupResources()` ham `dispose()` chaqiruvida, ham `init()` vaqtida yarim yo‘lda xato chiqqanda (`catch` bloki, masalan `createWaveShaper()` yoki `createBuffer()` xatosi) yaratilgan barcha oscillator va node’larni alohida `try/catch` bloklarida to‘xtatib uzadi hamda yaratilgan `AudioContext.close()` promise’ini `this.closePromise` (`waitForClose()`) orqali kuzatib yopadi.
   - `CameraController.detach()` aktiv drag va pointer capture (`releasePointerCapture`) holatini to‘liq yakunlaydi hamda `lostpointercapture` hodisasini tinglaydi.
 
 ---
@@ -42,7 +42,7 @@ Ushbu hujjat `D:\neon-race` monorepo loyihasida o‘tkazilgan texnik audit topil
 - **`web/src/game/input/inputController.ts`**:
   - `isInteractiveTarget(target, activeElement)` endi `Element.closest()` va ota elementlar zanjiri orqali `button, input, textarea, select, option, dialog, a[href], summary, [role="button"], [role="link"], [role="menuitem"], [role="switch"], [role="tab"], [contenteditable=""], [contenteditable="true"]` elementlarini hamda `document.activeElement` ni tekshiradi.
   - Fokus interaktiv UI elementda bo‘lganda `keydown`/`keyup` o‘yin boshqaruvini (`Space`, `WASD`, hotkey’lar) ishga tushirmaydi va `preventDefault()` chaqirmaydi (`Space`/`Enter` tugmani tabiiy faollashtiradi).
-  - `window.focusin` (interaktiv elementga fokus o‘tganda), `window.blur` va `document.visibilitychange` (`document.hidden`) hodisalarida `releaseAllInputs()` barcha bosib turilgan tugmalarni darhol `0` ga tushiradi.
+  - `window.focusin` (interaktiv elementga fokus o‘tganda), `window.blur` va `document.visibilitychange` (`document.hidden`) hodisalarida `clearKeys()` / `clearAll()` barcha bosib turilgan tugmalarni darhol `0` ga tushiradi.
 - **`web/src/components/GameToolbar.tsx`, `StartScreen.tsx`, `TouchControls.tsx`, `GameEngine.ts`**:
   - `GameToolbar.tsx` ichidagi majburiy `.blur()` olib tashlandi; `:focus-visible` uslubi `game.css` ga qo‘shildi.
   - `#gl` canvas `tabIndex = 0` oldi; `#go` (Start) tugmasi bosilganda va `#gl` canvas’ga `pointerdown` qilinganda `focusCanvas()` fokusni `#gl` ga o‘tkazadi.
@@ -53,28 +53,28 @@ Ushbu hujjat `D:\neon-race` monorepo loyihasida o‘tkazilgan texnik audit topil
 ## 3. P2 — Hujjatlar va Node.js Versiya Mosligi
 
 ### Muammolar va Ildiz Sabablar
-- `README_UZ.md` da bir nechta tugmalar (`X` vs `V`, `H` vs `B`, `P` vs `Esc`, `Z` vs `Y` `0.25×`) va `localStorage` kalitlari koddan farq qilgan.
-- `package.json` da `"engines": { "node": ">=22.0.0" }` yozilgan bo‘lsa-da, `node --test tests/*.test.ts` Node 22 da `--experimental-strip-types` bayrog‘isiz ishlamaydi (Node 24 da esa bevosita ishlaydi).
+- `README_UZ.md` va `MIGRATION.md` da bir nechta tugmalar (`X` vs `V`, `H` vs `B`, `P` vs `Esc`, `Z` vs `Y` `0.25×`), uzatma nisbatlari (`[2.95, 1.95, 1.42, 1.10, 0.87]`), Crash Test tezligi (`80 km/h = 80 / 3.6 ≈ 22.22 m/s`) va `localStorage` kalitlari (`musclecar.*`) koddan farq qilgan.
+- `package.json` va `package-lock.json` da `"engines"` talabi bir xil bo‘lmagan (`node --test tests/*.test.ts` Node 24 da qo‘shimcha bayroqlarsiz bevosita ishlaydi).
 
 ### Kiritilgan Tuzatishlar
-- Root `package.json`, `web/package.json` va `backend/package.json` fayllarida `"engines": { "node": ">=24.0.0", "npm": ">=11.0.0" }` bir xil qilib belgilandi.
-- `README_UZ.md` va `MIGRATION.md` haqiqiy kod konstantalari (`5` oldinga uzatma + `R`, `5` kamera, `8` bo‘yoq rangi, barcha hotkey’lar va `7` ta `localStorage` kaliti) bilan 100% moslashtirildi.
+- Root `package.json`, `web/package.json`, `backend/package.json` hamda `package-lock.json` ichidagi workspace yozuvlarida `"engines": { "node": ">=24.0.0", "npm": ">=11.0.0" }` bir xil qilib belgilandi.
+- `README_UZ.md` va `MIGRATION.md` haqiqiy kod konstantalari (`gears: [2.95, 1.95, 1.42, 1.10, 0.87]`, `reverse: 3.1`, `final: 3.7`, Crash Test `80 km/h`, `5` kamera, `8` bo‘yoq rangi, barcha hotkey’lar va `7` ta `musclecar.*` `localStorage` kaliti) bilan 100% moslashtirildi.
 
 ---
 
 ## 4. P1/P2 — Haqiqiy Xulq-atvor va Real Browser E2E Testlari
 
-- **`web/tests/engine.test.ts`**:
+- **`web/tests/engine.test.ts`** (8 ta unit test):
   - Headless unit testlar haqiqiy vazifasiga mos nomlandi (`Headless GameEngine ...`).
-  - `ResourceTracker` (`Mesh`, `InstancedMesh`, `Points`, `LineSegments`, `Sprite`, texture maps, shader uniform textures, shared `Sprite` geometry himoyasi), PMREM `WebGLRenderTarget` (`texture` ikki marta `dispose()` bo‘lmasligi va xatoga chidamlilik), `window.carLab` token egaligi va `InputController` fokus ajratish uchun alohida unit testlar qo‘shildi.
-- **`backend/tests/server.test.ts`**:
+  - `ResourceTracker` (`Mesh`, `InstancedMesh`, `Points`, `LineSegments`, `Sprite`, texture maps, shader uniform textures, shared `Sprite` geometry himoyasi), PMREM `WebGLRenderTarget` (`texture` ikki marta `dispose()` bo‘lmasligi va xatoga chidamlilik), `window.carLab` token egaligi, `InputController` fokus ajratish va `SoundEngine.init()` yarim tayyorlangan audio xatosini tozalash uchun alohida unit testlar qo‘shildi.
+- **`backend/tests/server.test.ts`** (11 ta server va offline bundle testi):
   - Test boshlanishida (`before()`) har doim `web/dist` tozalanib, `viteBuild` orqali joriy manbadan yangidan yig‘iladi.
   - Faqat `index.html` emas, balki build ichidagi barcha `.html`, `.css` va `.js` fayllar o‘qilib, tashqi `http://`, `https://`, `//`, `ws://`, `wss://` havolalar va CDN manzillar yo‘qligi tekshiriladi.
-- **`web/tests/e2e.test.ts`**:
-  - Playwright + lokal Chromium (`--use-angle=swiftshader --enable-webgl`) yordamida 3 ta haqiqiy browser E2E testi qo‘shildi:
-    1. **E2E 1 — Offline va Render**: Tashqi tarmoq bloklangan holda sahifa yuklanishi, `#gl`, `#cluster`, `#gmeter` canvas’lari, WebGL draw call’lar, haydash va Crash Test (`V`) hamda desktop/mobil skrinshotlar.
-    2. **E2E 2 — Fokus va Klaviatura (6 ta ssenariy)**: Toolbar `<button>` da `Space` va `Enter`, `#gl` canvas’da `Space` qo‘l tormozi, `<input>` ichida `W` yozish, `W` bosib turilganda fokus `<button>` ga o‘tishi (`stuck key` bo‘lmasligi), `#go` Start bosilganda fokus `#gl` ga o‘tishi.
-    3. **E2E 3 — 5× `<StrictMode>` Lifecycle va GPU Cleanup**: 5 marta `<StrictMode><GameViewport /></StrictMode>` mount → start → Crash Test → unmount sikli; har sikl yakunida `glCanvasCount === 0`, `window.carLab === undefined`, `engine.isDisposed() === true`, `renderer.info.memory.geometries === 0`, `renderer.info.memory.textures === 0`, `activeRafs === 0` va `AudioContext.state === 'closed'`.
+- **`web/tests/e2e.test.ts`** (3 ta kompleks Playwright + Chromium WebGL E2E testi):
+  - Belgilangan kadrlar sonini kutish o‘rniga o‘yin holati o‘zgarishini cheklangan timeout bilan kutish (`page.waitForFunction` / `waitUntil`) qo‘llandi (FPS’ga bog‘liqlik bartaraf etildi):
+    1. **E2E 1 — Offline va To‘liq O‘yin Oqimi**: Tashqi tarmoq bloklangan holda sahifa yuklanishi, `#gl` WebGL draw call’lar, gaz/rul/tormoz, kamera almashishi, Crash Test (`KeyV`) da haqiqiy devorga urilish (`contacts >= 1`, `displaced > 0`), Repair (`KeyF`), Pause/Resume (`Escape`) hamda desktop/mobil skrinshotlar.
+    2. **E2E 2 — Fokus va Klaviatura (6 ta ssenariy)**: Toolbar `<button>` da `Space` va `Enter`, `#gl` canvas’da `Space` qo‘l tormozi, `<input>` ichida `W` yozish, `W` bosib turilganda fokus `<input>` ga o‘tishi (`stuck key` bo‘lmasligi), `#go` Start bosilganda fokus `#gl` ga o‘tishi.
+    3. **E2E 3 — 5× `<StrictMode>` Lifecycle, GPU Cleanup va Real-Browser Audio Error Probe**: Haqiqiy Chromium `AudioContext` da `createWaveShaper()` xatosi yuz berganda kontekstning `closed` holatga o‘tishi hamda 5 marta `<StrictMode><GameViewport /></StrictMode>` mount → start → Crash Test (`contacts >= 1 && displaced > 0` tasdiqlangach) → unmount sikli; har sikl yakunida `glCanvasCount === 0`, `window.carLab === undefined`, `engine.isDisposed() === true`, `renderer.info.memory.geometries === 0`, `renderer.info.memory.textures === 0`, `activeRafs === 0` va `AudioContext.state === 'closed'`.
 
 ---
 

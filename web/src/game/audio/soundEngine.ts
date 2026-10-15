@@ -97,16 +97,17 @@ export class SoundEngine {
         ['sawtooth', 0.5, 0.5],
         ['square', 2.01, 0.08],
       ];
-      this.oscs = specs.map(([type, mul, gain]) => {
+      this.oscs = [];
+      for (const [type, mul, gain] of specs) {
         const o = c.createOscillator();
         const g = c.createGain();
+        this.oscs.push({ o, g, mul });
         o.type = type;
         g.gain.value = gain;
         o.connect(g);
         g.connect(shaper);
         o.start();
-        return { o, g, mul };
-      });
+      }
 
       shaper.connect(this.lp);
       this.lp.connect(this.eng);
@@ -124,10 +125,16 @@ export class SoundEngine {
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
       this.noise = buf;
 
-      const loop = (filterType: BiquadFilterType, freq: number, q: number): NoiseLoopLayer => {
+      const loop = (
+        filterType: BiquadFilterType,
+        freq: number,
+        q: number,
+        assign: (layer: NoiseLoopLayer) => void,
+      ): void => {
         const s = c.createBufferSource();
         const f = c.createBiquadFilter();
         const g = c.createGain();
+        assign({ s, f, g });
         s.buffer = buf;
         s.loop = true;
         f.type = filterType;
@@ -138,14 +145,17 @@ export class SoundEngine {
         f.connect(g);
         g.connect(comp);
         s.start(0, Math.random());
-        return { s, f, g };
       };
 
-      this.skid = loop('bandpass', 1100, 6);
-      this.wind = loop('lowpass', 380, 0.7);
+      loop('bandpass', 1100, 6, (layer) => {
+        this.skid = layer;
+      });
+      loop('lowpass', 380, 0.7, (layer) => {
+        this.wind = layer;
+      });
       return true;
     } catch {
-      this.ctx = null;
+      this.cleanupResources();
       return false;
     }
   }
@@ -271,22 +281,32 @@ export class SoundEngine {
     }
   }
 
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
+  private cleanupResources(): void {
     for (const { o, g } of this.oscs) {
       try {
         o.stop();
+      } catch {
+        // already stopped or not started
+      }
+      try {
         o.disconnect();
+      } catch {
+        // ignore
+      }
+      try {
         g.disconnect();
       } catch {
-        // already stopped
+        // ignore
       }
     }
     this.oscs = [];
     for (const node of this.oneShots) {
       try {
         node.stop();
+      } catch {
+        // ignore
+      }
+      try {
         node.disconnect();
       } catch {
         // ignore
@@ -296,6 +316,10 @@ export class SoundEngine {
     if (this.lfo) {
       try {
         this.lfo.stop();
+      } catch {
+        // ignore
+      }
+      try {
         this.lfo.disconnect();
       } catch {
         // ignore
@@ -314,8 +338,20 @@ export class SoundEngine {
       if (layer) {
         try {
           layer.s.stop();
+        } catch {
+          // ignore
+        }
+        try {
           layer.s.disconnect();
+        } catch {
+          // ignore
+        }
+        try {
           layer.f.disconnect();
+        } catch {
+          // ignore
+        }
+        try {
           layer.g.disconnect();
         } catch {
           // ignore
@@ -342,7 +378,18 @@ export class SoundEngine {
     if (this.ctx) {
       const c = this.ctx;
       this.ctx = null;
-      this.closePromise = c.close().catch(() => {});
+      if (c.state !== 'closed' && typeof c.close === 'function') {
+        const nextClose = Promise.resolve()
+          .then(() => c.close())
+          .catch(() => {});
+        this.closePromise = this.closePromise ? this.closePromise.then(() => nextClose) : nextClose;
+      }
     }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.cleanupResources();
   }
 }

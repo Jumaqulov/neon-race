@@ -107,7 +107,7 @@ Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputControlle
   - `Space`: Qo‘l tormozi (Handbrake) — faqat fokus canvas/body’da bo‘lganda ishlaydi; fokus toolbar tugmasida bo‘lsa, tugmaning standart `Space`/`Enter` bosilishini buzmaydi.
 - **Kamera va ko‘rish (5 ta kamera: `Chase`, `Far chase`, `Hood`, `Orbit`, `Inspect`)**:
   - `C`: Kamerani navbat bilan almashtirish (`0..4`)
-  - `I`: Inspect (`cam = 4`) erkin orbita rejimiga o‘tish yoki undan chiqish (sichqoncha bilan surish, g‘ildirakcha bilan `zoom`, ikki marta bosish / `double-click` bilan kamerani markazlash)
+  - `I`: Inspect (`cam = 4`) erkin orbita rejimiga o‘tish yoki undan chiqish (sichqoncha bilan bosib surish orqali aylantirish va g‘ildirakcha bilan `zoom` qilish, masofa `4..16` m)
 - **Yoritish va chiroqlar**:
   - `L`: Old faralar (Headlights)
   - `O`: Yon gabarit chiroqlari (Side marker lights)
@@ -116,7 +116,7 @@ Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputControlle
   - `B`: Avariya chiroqlari (Hazards)
   - `N`: Kun / Tun mavzusi (Day / Night)
 - **Shikastlanish, sinov va fizika**:
-  - `V`: Crash Test — avtomobilning old qismiga sinov zarbasini berish (`speed: 19 m/s`)
+  - `V`: Crash Test — o‘yin ichidagi haqiqiy devorga urilish sinovi (`80 km/h`, ya’ni `80 / 3.6 ≈ 22.22 m/s`, `3`-uzatma)
   - `F`: Avtomobil kuzovi, oynalari, faralari va g‘ildiraklarini to‘liq ta’mirlash (`Repair`)
   - `R`: Avtomobil va konuslarni boshlang‘ich holatga qaytarish (`Reset`)
   - `T`: Traction Control (`TCS`) yoqish / o‘chirish
@@ -130,7 +130,7 @@ Barcha tugmalar `web/src/game/GameEngine.ts`, `web/src/game/input/inputControlle
   - `H`: Yordam oynasini (`Help`) ochish / yopish
   - `Escape`: Pauza (`Pause` / `Resume`)
 - **Uzatmalar qutisi (Transmission)**:
-  - Avtomatik: 5 ta oldinga uzatma (`1`–`5`, nisbatlar `[3.10, 2.05, 1.43, 1.10, 0.88]`), `N` (neytral) va `R` (orqaga uzatma).
+  - Avtomatik: 5 ta oldinga uzatma (`1`–`5`, nisbatlar `[2.95, 1.95, 1.42, 1.10, 0.87]`), `N` (neytral) va `R` (orqaga uzatma, `reverse: 3.1`, `final: 3.7`).
 - **Sensorli ekran va Gamepad**:
   - Mobil / touch ekranlarda `TouchControls` paneli va standart HTML5 Gamepad API to‘liq ishlaydi.
 

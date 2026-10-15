@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { GameEngine } from '../src/game/GameEngine.ts';
+import { SoundEngine } from '../src/game/audio/soundEngine.ts';
 import { InputController, isInteractiveTarget } from '../src/game/input/inputController.ts';
 import { ResourceTracker } from '../src/game/rendering/resourceTracker.ts';
 import type { StorageAdapter } from '../src/storage/settingsStore.ts';
@@ -392,3 +393,171 @@ test('Headless GameEngine UI commands synchronize state and persist localStorage
 
   engine.dispose();
 });
+
+test('SoundEngine cleans up partial nodes and closes AudioContext when initialization throws midway', async () => {
+  const prevWindow = (globalThis as { window?: unknown }).window;
+
+  interface MockNode {
+    connected: number;
+    disconnected: number;
+    started: number;
+    stopped: number;
+    connect: () => void;
+    disconnect: () => void;
+    start: () => void;
+    stop: () => void;
+    gain: { value: number; setTargetAtTime: () => void; setValueAtTime: () => void; exponentialRampToValueAtTime: () => void };
+    frequency: { value: number; setTargetAtTime: () => void; setValueAtTime: () => void; exponentialRampToValueAtTime: () => void };
+    Q: { value: number };
+    type: string;
+    curve: Float32Array | null;
+    buffer: unknown;
+    loop: boolean;
+  }
+
+  const createdNodes: MockNode[] = [];
+  const makeNode = (): MockNode => {
+    const node: MockNode = {
+      connected: 0,
+      disconnected: 0,
+      started: 0,
+      stopped: 0,
+      connect() {
+        this.connected++;
+      },
+      disconnect() {
+        this.disconnected++;
+      },
+      start() {
+        this.started++;
+      },
+      stop() {
+        if (this.started === 0) {
+          throw new Error('InvalidStateError: cannot call stop without start');
+        }
+        this.stopped++;
+      },
+      gain: {
+        value: 0,
+        setTargetAtTime: () => {},
+        setValueAtTime: () => {},
+        exponentialRampToValueAtTime: () => {},
+      },
+      frequency: {
+        value: 0,
+        setTargetAtTime: () => {},
+        setValueAtTime: () => {},
+        exponentialRampToValueAtTime: () => {},
+      },
+      Q: { value: 0 },
+      type: 'lowpass',
+      curve: null,
+      buffer: null,
+      loop: false,
+    };
+    createdNodes.push(node);
+    return node;
+  };
+
+  let failAt: 'createWaveShaper' | 'createBuffer' | 'none' = 'createWaveShaper';
+  const createdContexts: Array<{ state: string; closeCalls: number }> = [];
+
+  class FakeAudioContext {
+    public state = 'running';
+    public closeCalls = 0;
+    public sampleRate = 44100;
+    public currentTime = 0;
+    public destination = {};
+
+    constructor() {
+      createdContexts.push(this);
+    }
+
+    createGain() {
+      return makeNode();
+    }
+
+    createDynamicsCompressor() {
+      return makeNode();
+    }
+
+    createWaveShaper() {
+      if (failAt === 'createWaveShaper') {
+        throw new Error('Simulated createWaveShaper failure');
+      }
+      return makeNode();
+    }
+
+    createBiquadFilter() {
+      return makeNode();
+    }
+
+    createOscillator() {
+      return makeNode();
+    }
+
+    createBuffer(_channels: number, length: number) {
+      if (failAt === 'createBuffer') {
+        throw new Error('Simulated createBuffer failure after oscillators started');
+      }
+      return {
+        getChannelData: () => new Float32Array(length),
+      };
+    }
+
+    createBufferSource() {
+      return makeNode();
+    }
+
+    async close(): Promise<void> {
+      this.closeCalls++;
+      await new Promise((r) => setTimeout(r, 5));
+      this.state = 'closed';
+    }
+  }
+
+  (globalThis as { window?: unknown }).window = { AudioContext: FakeAudioContext };
+
+  try {
+    // Case A: Failure in createWaveShaper() right after master & compressor creation
+    const audioA = new SoundEngine();
+    const okA = audioA.init(true);
+    assert.equal(okA, false, 'init() must return false when createWaveShaper throws');
+    assert.equal(audioA.ctx, null, 'ctx reference must be cleared after failed init');
+    assert.equal(createdContexts.length, 1);
+
+    await audioA.waitForClose();
+    assert.equal(createdContexts[0].closeCalls, 1, 'Failed init() must call close() on the created AudioContext');
+    assert.equal(createdContexts[0].state, 'closed', 'AudioContext created before failure must transition to closed');
+    assert(
+      createdNodes.every((n) => n.disconnected >= 1),
+      'All partially created AudioNodes (master, compressor) must be disconnected on failure',
+    );
+
+    audioA.dispose();
+    await audioA.waitForClose();
+    assert.equal(createdContexts[0].closeCalls, 1, 'dispose() after failed init must not double-close AudioContext');
+
+    // Case B: Failure in createBuffer() after 3 oscillators + LFO have already started
+    createdNodes.length = 0;
+    failAt = 'createBuffer';
+    const audioB = new SoundEngine();
+    const okB = audioB.init(true);
+    assert.equal(okB, false, 'init() must return false when createBuffer throws');
+    assert.equal(audioB.ctx, null);
+    assert.equal(createdContexts.length, 2);
+
+    await audioB.waitForClose();
+    assert.equal(createdContexts[1].closeCalls, 1, 'Failed init() after oscillator start must close AudioContext');
+    assert.equal(createdContexts[1].state, 'closed');
+    const startedOscs = createdNodes.filter((n) => n.started > 0);
+    assert.equal(startedOscs.length, 4, '3 engine oscillators + 1 LFO were started before createBuffer threw');
+    assert(
+      startedOscs.every((n) => n.stopped === 1 && n.disconnected >= 1),
+      'All started oscillators must be stopped and disconnected when init() fails midway',
+    );
+  } finally {
+    (globalThis as { window?: unknown }).window = prevWindow;
+  }
+});
+
